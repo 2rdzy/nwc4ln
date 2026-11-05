@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"syscall"
 
 	_ "modernc.org/sqlite" // Pure-Go SQLite driver, so the binary needs no C toolchain.
 )
@@ -41,6 +42,31 @@ func Create(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("create database: %w", err)
 	}
 	return open(ctx, path)
+}
+
+// ErrLocked means another process is running on this data folder.
+var ErrLocked = errors.New("another nwc4ln is running on this data folder")
+
+// LockFileName is the lock file in the data folder.
+const LockFileName = "nwc4ln.lock"
+
+// Lock takes the data folder for this process, and returns how to let it go. The
+// ledger knows only the payments it started itself, so a second one would fail
+// the first one's new payments. The system drops the lock if the process dies, so
+// a crash leaves nothing behind. Readers such as backup do not need it.
+func Lock(dataDir string) (release func() error, err error) {
+	file, err := os.OpenFile(filepath.Join(dataDir, LockFileName), os.O_RDWR|os.O_CREATE, FileMode)
+	if err != nil {
+		return nil, fmt.Errorf("open lock file: %w", err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		closeErr := file.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errors.Join(ErrLocked, closeErr)
+		}
+		return nil, errors.Join(fmt.Errorf("lock data folder: %w", err), closeErr)
+	}
+	return file.Close, nil
 }
 
 // Open opens an existing database and applies any new migrations.

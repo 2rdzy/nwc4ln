@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/2rdzy/nwc4ln/internal/config"
+	"github.com/2rdzy/nwc4ln/internal/store"
 )
 
 // A failure here means a repeated init wipes the ledger or the settings.
@@ -80,6 +82,27 @@ func TestStartRefusesWithoutInit(t *testing.T) {
 	err = run(context.Background(), []string{"start", "--config", path}, &bytes.Buffer{})
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// Catches: a second service on the same data folder.
+func TestStartRefusesWhileRunning(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nwc4ln.toml")
+	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	release, err := store.Lock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = release() }()
+	// Without the lock, start would run until this ends.
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	err = run(ctx, []string{"start", "--config", path}, io.Discard)
+	if !errors.Is(err, store.ErrLocked) {
+		t.Fatalf("start: %v", err)
 	}
 }
 

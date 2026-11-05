@@ -102,6 +102,11 @@ func runStart(ctx context.Context, configPath string, out io.Writer) (err error)
 	if err != nil {
 		return err
 	}
+	release, err := store.Lock(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, release()) }()
 	db, err := store.Open(ctx, filepath.Join(cfg.DataDir, databaseName))
 	if err != nil {
 		return err

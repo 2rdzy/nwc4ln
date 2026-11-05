@@ -3,7 +3,7 @@
 **NWC for Lightning:** connect apps with spending limits, and create sub-wallets, on LND or Core Lightning over Nostr
 Wallet Connect.
 
-> **Status: planning.** The design is done and there is no code yet.
+> **Status: early development.** Not ready for use.
 
 ## What it will do
 

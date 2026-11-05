@@ -22,7 +22,7 @@ type PayRequest struct {
 }
 
 // Pay pays an invoice and returns its transaction. An error means nothing was
-// paid and no hold exists. With no error, the state says what happened: settled,
+// paid and no hold exists, so nothing after the hold returns one. With no error, the state says what happened: settled,
 // failed, or pending if the node has no final answer yet or ctx ended first.
 // Pending is not a failure: the payment may still settle, the hold stays, and
 // the sweep finishes it. The end of ctx never stops the payment.
@@ -68,7 +68,13 @@ func (l *Ledger) Pay(ctx context.Context, request PayRequest) (Transaction, erro
 	case <-done:
 	case <-ctx.Done():
 	}
-	return l.transaction(context.WithoutCancel(ctx), row.ID)
+	tx, err := l.transaction(context.WithoutCancel(ctx), row.ID)
+	if err != nil {
+		// An error here would read as "not paid". Pending is the honest answer.
+		l.log.Warn("read payment result", "hash", row.PaymentHash, "error", err)
+		return row, nil
+	}
+	return tx, nil
 }
 
 func payAmount(decoded node.DecodedInvoice, requested int64) (int64, error) {
@@ -117,6 +123,9 @@ func (l *Ledger) hold(
 	}
 	reserve := int64(0)
 	if !internal {
+		if decoded.Destination == l.nodeKey() {
+			return Transaction{}, ErrOwnInvoice
+		}
 		reserve = Reserve(amount)
 	}
 	row := Transaction{
@@ -174,8 +183,7 @@ func (l *Ledger) send(ctx context.Context, row Transaction, nodeAmount int64) {
 		Invoice: row.Invoice, AmountMsat: nodeAmount, FeeLimitMsat: row.ReserveMsat, Timeout: payTimeout,
 	})
 	if err == nil && (payment.State == node.PaymentSucceeded || payment.State == node.PaymentFailed) {
-		l.forget(row.ID)
-		l.resolve(ctx, row, payment)
+		l.apply(ctx, row, payment) // The node's own answer to this call: always believed.
 		return
 	}
 	// The error says nothing about the payment. Only the node's record does.
@@ -204,28 +212,39 @@ func (l *Ledger) forget(id int64) {
 	delete(l.attempts, id)
 }
 
-// trusted reports whether a non-success answer about this row can be believed.
-func (l *Ledger) trusted(id int64) bool {
+func (l *Ledger) nodeKey() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	attempt, ok := l.attempts[id]
-	return !ok || (!attempt.live && !l.now().Before(attempt.trustFrom))
+	return l.pubKey
 }
 
-// resolve applies a node answer to a pending row. Pay, the sweep and restart all
-// use it. Anything that is not final leaves the hold in place.
+// trusted reports whether a non-success answer about this row can be believed. A
+// row with no attempt was made before this process, or by one that just stopped,
+// so a young row gets the same wait as a Pay error.
+func (l *Ledger) trusted(row Transaction) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if attempt, ok := l.attempts[row.ID]; ok {
+		return !attempt.live && !l.now().Before(attempt.trustFrom)
+	}
+	return !l.now().Before(row.CreatedAt.Add(noRecordGrace))
+}
+
+// resolve applies a node answer about a pending row, if it can be believed. The
+// sweep and restart use it, and so does Pay after an error.
 func (l *Ledger) resolve(ctx context.Context, row Transaction, payment node.Payment) {
+	if payment.State == node.PaymentSucceeded || l.trusted(row) {
+		l.apply(ctx, row, payment)
+	}
+}
+
+// apply stores a node answer. Anything that is not final leaves the hold in place.
+func (l *Ledger) apply(ctx context.Context, row Transaction, payment node.Payment) {
 	var err error
 	switch payment.State {
 	case node.PaymentSucceeded:
-		if payment.FeeMsat > row.ReserveMsat {
-			l.log.Error("fee above the reserve", "hash", row.PaymentHash, "fee", payment.FeeMsat, "reserve", row.ReserveMsat)
-		}
-		err = settleOutgoing(ctx, l.db, row.ID, payment.FeeMsat, payment.Preimage, l.now())
+		err = l.applySuccess(ctx, row, payment)
 	case node.PaymentFailed, node.PaymentNoRecord:
-		if !l.trusted(row.ID) {
-			return
-		}
 		l.log.Info("payment failed", "hash", row.PaymentHash, "reason", payment.FailureReason)
 		err = failRow(ctx, l.db, row.ID)
 	default:
@@ -236,6 +255,33 @@ func (l *Ledger) resolve(ctx context.Context, row Transaction, payment node.Paym
 		return
 	}
 	l.forget(row.ID)
+}
+
+// applySuccess charges what the node really sent. It differs from the row only if
+// the hash was paid by another tool. A row that has failed already is not changed,
+// but this means money left the node with no record of it: see the Late success
+// item in the project's list.
+func (l *Ledger) applySuccess(ctx context.Context, row Transaction, payment node.Payment) error {
+	amount := row.AmountMsat
+	if payment.AmountMsat != 0 && payment.AmountMsat != amount {
+		l.log.Error("node sent a different amount", "hash", row.PaymentHash, "row", amount, "node", payment.AmountMsat)
+		amount = payment.AmountMsat
+	}
+	if payment.FeeMsat > row.ReserveMsat {
+		l.log.Error("fee above the reserve", "hash", row.PaymentHash, "fee", payment.FeeMsat, "reserve", row.ReserveMsat)
+	}
+	moved, err := settleOutgoing(ctx, l.db, row.ID, amount, payment.FeeMsat, payment.Preimage, l.now())
+	if err != nil || moved {
+		return err
+	}
+	current, err := l.transaction(ctx, row.ID)
+	if err != nil {
+		return err
+	}
+	if current.State == StateFailed {
+		l.log.Error("node paid a payment the ledger failed", "hash", row.PaymentHash, "amount", amount)
+	}
+	return nil
 }
 
 // trackPending asks the node about each pending payment. Reading the rows here,
