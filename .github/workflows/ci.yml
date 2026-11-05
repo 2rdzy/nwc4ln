@@ -37,8 +37,6 @@ jobs:
     name: integration
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      NWC4LN_IT_DIR: ${{ runner.temp }}/nwc4ln-it
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,6 +51,8 @@ jobs:
         with:
           path: ~/.cache/nwc4ln-it
           key: nwc4ln-it-${{ runner.os }}-${{ hashFiles('test/integration/versions.env') }}
+      - name: Set the data folder
+        run: echo "NWC4LN_IT_DIR=$RUNNER_TEMP/nwc4ln-it" >> "$GITHUB_ENV"
       - name: Vet with the integration tag
         run: go vet -tags integration ./...
       - name: Start the network
