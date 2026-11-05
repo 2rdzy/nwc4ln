@@ -21,7 +21,10 @@ const (
 	StateFailed  = "failed"
 )
 
-const settleIndexKey = "settle_index"
+const (
+	settleIndexKey = "settle_index"
+	nodeKeyKey     = "node_pubkey"
+)
 
 // Transaction is one row of the transactions table.
 type Transaction struct {
@@ -147,10 +150,13 @@ func changedOne(result sql.Result, err error) (bool, error) {
 	return count == 1, err
 }
 
-func settleOutgoing(ctx context.Context, db executor, id, feeMsat int64, preimage string, at time.Time) error {
-	_, err := db.ExecContext(ctx, `UPDATE transactions SET state = 'settled', fee_msat = ?, preimage = ?, settled_at = ?
-		WHERE id = ? AND state = 'pending'`, feeMsat, preimage, at.Unix(), id)
-	return err
+// settleOutgoing reports whether a row changed.
+func settleOutgoing(
+	ctx context.Context, db executor, id, amountMsat, feeMsat int64, preimage string, at time.Time,
+) (bool, error) {
+	return changedOne(db.ExecContext(ctx, `UPDATE transactions
+		SET state = 'settled', amount_msat = ?, fee_msat = ?, preimage = ?, settled_at = ?
+		WHERE id = ? AND state = 'pending'`, amountMsat, feeMsat, preimage, at.Unix(), id))
 }
 
 func failRow(ctx context.Context, db executor, id int64) error {
@@ -198,6 +204,18 @@ func settleBothSides(ctx context.Context, db *sql.DB, row Transaction, at time.T
 		return errors.New("invoice is no longer pending")
 	}
 	return tx.Commit()
+}
+
+// bindNodeKey stores the key if none is stored, and returns the stored one.
+func bindNodeKey(ctx context.Context, db *sql.DB, key string) (string, error) {
+	_, err := db.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, ?)
+		ON CONFLICT (key) DO NOTHING`, nodeKeyKey, key)
+	if err != nil {
+		return "", err
+	}
+	var stored string
+	err = db.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = ?", nodeKeyKey).Scan(&stored)
+	return stored, err
 }
 
 func settleIndex(ctx context.Context, db querier) (uint64, error) {

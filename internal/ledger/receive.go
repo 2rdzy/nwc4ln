@@ -63,9 +63,9 @@ func (l *Ledger) accountUsable(ctx context.Context, accountID int64) error {
 // settle index, and it ends when it is done, which the subscription never says.
 // It never writes the index: see onSettled.
 //
-// It runs at each start. It also runs on each sweep while the index is 0, because
-// the subscription replays nothing from 0: an invoice that settles after a pass
-// and before the stream opens would otherwise never be seen.
+// It runs at each start, and now and then on the sweep. It also runs on each sweep
+// while the index is 0, because the subscription replays nothing from 0: an invoice
+// that settles after a pass and before the stream opens would otherwise never be seen.
 func (l *Ledger) catchUp(ctx context.Context) error {
 	rows, err := pendingRows(ctx, l.db, TypeIncoming)
 	if err != nil {
@@ -76,7 +76,17 @@ func (l *Ledger) catchUp(ctx context.Context) error {
 		invoice, err := l.node.LookupInvoice(ctx, row.PaymentHash)
 		switch {
 		case errors.Is(err, node.ErrNotFound):
+			// The node removes canceled invoices if told to, but never settled ones.
+			// checkNode has shown this is the right node, so this one cannot settle.
 			l.log.Warn("pending invoice not found on the node", "hash", row.PaymentHash)
+			if !l.isLive(row.PaymentHash) {
+				err = failRow(ctx, l.db, row.ID)
+			} else {
+				err = nil
+			}
+			if err != nil {
+				errs = append(errs, err)
+			}
 			continue
 		case err != nil:
 			errs = append(errs, err)

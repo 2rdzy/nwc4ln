@@ -29,7 +29,8 @@ import (
 
 const (
 	// MaxAmountMsat is all the bitcoin there will ever be. Refusing anything above
-	// it keeps amount plus reserve, and any sum of them, far from overflowing.
+	// it keeps amount plus reserve from overflowing. A sum of rows stays safe because
+	// rows hold real money, not because of this cap.
 	MaxAmountMsat = 21_000_000 * 100_000_000 * 1_000
 
 	minReserveMsat = 10_000
@@ -41,12 +42,14 @@ const (
 	// payment can outlive this, and the sweep then follows it.
 	payCallMargin = 5 * time.Second
 
-	// noRecordGrace is how long after a Pay error only success is believed. The
-	// request may still be on its way, so "no record" may not be the last word.
+	// noRecordGrace is how long only success is believed, after a Pay error or
+	// after a row is made. The request may still be on its way, so "no record" may
+	// not be the last word. The second case covers a fast restart.
 	noRecordGrace = 2 * time.Minute
 
-	sweepEvery = 5 * time.Second
-	retryEvery = 5 * time.Second
+	sweepEvery   = 5 * time.Second
+	retryEvery   = 5 * time.Second
+	catchUpEvery = 10 * time.Minute
 )
 
 // Errors a caller can act on. Each means no row was written.
@@ -60,6 +63,12 @@ var (
 	ErrAlreadyPaid = errors.New("invoice is already paid or being paid")
 	// ErrInvoiceClosed means the invoice is from this node and can no longer be paid.
 	ErrInvoiceClosed = errors.New("invoice is closed")
+	// ErrOwnInvoice means the invoice is from this node but not in the ledger. The
+	// node refuses self-payments, so asking it would only hold funds for nothing.
+	ErrOwnInvoice = errors.New("invoice is from this node and not in the ledger")
+	// ErrNodeChanged means the node is not the one this ledger belongs to. Its "no
+	// record" answers mean nothing, and believing them would release every hold.
+	ErrNodeChanged = errors.New("node public key differs from the one stored in the ledger")
 )
 
 // Reserve returns the fee reserve for an amount: 1% rounded up, with a 10 sat
@@ -80,10 +89,11 @@ type Ledger struct {
 	log  *slog.Logger
 
 	// Changed only by tests.
-	now        func() time.Time
-	sweepEvery time.Duration
-	retryEvery time.Duration
-	beforePay  func() // Runs after the hold is stored, before the node call.
+	now          func() time.Time
+	sweepEvery   time.Duration
+	retryEvery   time.Duration
+	catchUpEvery time.Duration
+	beforePay    func() // Runs after the hold is stored, before the node call.
 
 	// holdLock covers the check and the insert of a payment, so that two payments
 	// at once cannot both pass. Payments to the node run outside it.
@@ -94,6 +104,8 @@ type Ledger struct {
 	stop     context.CancelFunc
 	attempts map[int64]*attempt
 	work     sync.WaitGroup
+	pubKey   string    // The node's key, set by Start.
+	nextPass time.Time // When a sweep next checks pending invoices.
 }
 
 // attempt is what this process knows about a payment it started. A row with no
@@ -111,7 +123,7 @@ type attempt struct {
 func New(db *store.Store, n node.Node, log *slog.Logger) *Ledger {
 	return &Ledger{
 		db: db.DB, node: n, log: log,
-		now: time.Now, sweepEvery: sweepEvery, retryEvery: retryEvery,
+		now: time.Now, sweepEvery: sweepEvery, retryEvery: retryEvery, catchUpEvery: catchUpEvery,
 		attempts: map[int64]*attempt{},
 	}
 }
@@ -121,6 +133,9 @@ func New(db *store.Store, n node.Node, log *slog.Logger) *Ledger {
 // the node cannot be reached it returns an error, with nothing released, and
 // can be called again.
 func (l *Ledger) Start(ctx context.Context) error {
+	if err := l.checkNode(ctx); err != nil {
+		return err
+	}
 	if err := l.catchUp(ctx); err != nil {
 		return fmt.Errorf("catch up on invoices: %w", err)
 	}
@@ -133,8 +148,29 @@ func (l *Ledger) Start(ctx context.Context) error {
 		return errors.New("ledger already started")
 	}
 	l.run, l.stop = context.WithCancel(context.Background())
+	l.nextPass = l.now().Add(l.catchUpEvery)
 	l.work.Go(func() { l.subscribe(l.run) })
 	l.work.Go(func() { l.sweepLoop(l.run) })
+	return nil
+}
+
+// checkNode ties the ledger to one node. The first start stores the node's key,
+// and every later start must see the same key.
+func (l *Ledger) checkNode(ctx context.Context) error {
+	info, err := l.node.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("read node identity: %w", err)
+	}
+	stored, err := bindNodeKey(ctx, l.db, info.PubKey)
+	if err != nil {
+		return fmt.Errorf("store node identity: %w", err)
+	}
+	if stored != info.PubKey {
+		return fmt.Errorf("%w: stored %s, node has %s", ErrNodeChanged, stored, info.PubKey)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.pubKey = info.PubKey
 	return nil
 }
 
@@ -142,11 +178,10 @@ func (l *Ledger) Start(ctx context.Context) error {
 // flight stay pending, and the next Start picks them up.
 func (l *Ledger) Close() {
 	l.mu.Lock()
-	stop := l.stop
-	l.mu.Unlock()
-	if stop != nil {
-		stop()
+	if l.stop != nil { // Under the lock, so that Pay's check and Add stay before Wait.
+		l.stop()
 	}
+	l.mu.Unlock()
 	l.work.Wait()
 }
 
@@ -166,17 +201,29 @@ func (l *Ledger) sweepLoop(ctx context.Context) {
 }
 
 // sweep is one pass over the unfinished work. See catchUp for why invoices are
-// checked while the settle index is 0.
+// checked while the settle index is 0. After that they are checked now and then,
+// which closes rows the stream never reports: expired, canceled or removed.
 func (l *Ledger) sweep(ctx context.Context) error {
 	index, err := settleIndex(ctx, l.db)
 	if err != nil {
 		return err
 	}
 	var catchUpErr error
-	if index == 0 {
+	if index == 0 || l.passDue() {
 		catchUpErr = l.catchUp(ctx)
 	}
 	return errors.Join(catchUpErr, l.trackPending(ctx))
+}
+
+func (l *Ledger) passDue() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	if now.Before(l.nextPass) {
+		return false
+	}
+	l.nextPass = now.Add(l.catchUpEvery)
+	return true
 }
 
 // isLive reports whether a node call is running for this hash.

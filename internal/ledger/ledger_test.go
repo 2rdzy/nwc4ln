@@ -1,12 +1,14 @@
 package ledger
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log/slog"
 	"math"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -310,6 +312,9 @@ func TestCrashBeforeNodeCall(t *testing.T) {
 		t.Fatalf("the node saw the payment: %+v", requests)
 	}
 	e.restart()
+	e.wantState(tx.ID, StatePending) // Too young to believe "no record".
+	e.advance(noRecordGrace)
+	e.sweep()
 	e.wantState(tx.ID, StateFailed)
 }
 
@@ -441,6 +446,8 @@ func TestCrashBetweenTwoSides(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.restart()
+	e.advance(noRecordGrace)
+	e.sweep()
 	e.wantState(out.ID, StateFailed)
 	e.wantState(in.ID, StateFailed)
 }
@@ -728,4 +735,171 @@ func TestPayBeforeStartIsRefused(t *testing.T) {
 	if !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("%v", err)
 	}
+}
+
+// Catches: a fast restart failing a payment whose request is still in transit. A
+// second process would do the same, but the data folder lock prevents that.
+func TestYoungRowWithNoAttemptIsNotFailed(t *testing.T) {
+	e := newEnv(t)
+	e.start()
+	other := e.fresh(e.node) // Knows nothing of this payment, like a restarted process.
+	e.ledger.beforePay = func() {
+		if err := other.trackPending(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}
+	if tx := e.pay(e.node.OutsideInvoice(5 * sat)); tx.State != StateSettled {
+		t.Fatalf("state: %s", tx.State)
+	}
+}
+
+// closedAfterPay closes the database once the node has the payment, so that
+// reading the result fails.
+type closedAfterPay struct {
+	*fake.Node
+	after func()
+}
+
+func (c *closedAfterPay) Pay(ctx context.Context, request node.PayRequest) (node.Payment, error) {
+	payment, err := c.Node.Pay(ctx, request)
+	c.after()
+	return payment, err
+}
+
+// Catches: an error after the hold, which a client would read as "not paid".
+func TestReadFailureAfterHoldIsPending(t *testing.T) {
+	e := newEnv(t)
+	e.ledger = e.fresh(&closedAfterPay{Node: e.node, after: func() { _ = e.store.DB.Close() }})
+	e.start()
+	tx, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: e.node.OutsideInvoice(5 * sat)})
+	if err != nil {
+		t.Fatalf("error after the hold: %v", err)
+	}
+	if tx.State != StatePending || tx.ID == 0 {
+		t.Fatalf("transaction: %+v", tx)
+	}
+}
+
+// Catches: a success lost in silence when the row has failed already.
+func TestSuccessOnFailedRowIsLogged(t *testing.T) {
+	e := newEnv(t)
+	var logged bytes.Buffer
+	e.ledger.log = slog.New(slog.NewTextHandler(&logged, nil))
+	e.start()
+	invoice := e.node.OutsideInvoice(5 * sat)
+	e.ledger.beforePay = func() {
+		if _, err := e.store.DB.Exec("UPDATE transactions SET state = 'failed'"); err != nil {
+			t.Error(err)
+		}
+	}
+	tx := e.pay(invoice)
+	if tx.State != StateFailed {
+		t.Fatalf("state: %s", tx.State)
+	}
+	if !strings.Contains(logged.String(), "node paid a payment the ledger failed") {
+		t.Fatalf("log: %s", logged.String())
+	}
+}
+
+// otherNode has a different identity.
+type otherNode struct{ *fake.Node }
+
+func (o otherNode) Info(ctx context.Context) (node.Info, error) {
+	info, err := o.Node.Info(ctx)
+	info.PubKey = "03other"
+	return info, err
+}
+
+// Catches: a swapped node's "no record" answers releasing every hold.
+func TestSwappedNodeIsRefused(t *testing.T) {
+	e := newEnv(t)
+	e.start()
+	e.node.ScriptPay(fake.PayTimeout)
+	tx := e.pay(e.node.OutsideInvoice(5 * sat))
+	e.ledger.Close()
+	e.advance(time.Hour)
+
+	swapped := e.fresh(otherNode{fake.New()})
+	if err := swapped.Start(context.Background()); !errors.Is(err, ErrNodeChanged) {
+		t.Fatalf("start: %v", err)
+	}
+	e.wantState(tx.ID, StatePending)
+}
+
+// Catches: charging the row's amount when the node sent another: the hash was
+// paid by a different tool first.
+func TestChargesWhatTheNodeSent(t *testing.T) {
+	e := newEnv(t)
+	e.start()
+	invoice := e.node.OutsideInvoice(0)
+	_, err := e.node.Pay(context.Background(), node.PayRequest{
+		Invoice: invoice, AmountMsat: 1 * sat, FeeLimitMsat: minReserveMsat, Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: invoice, AmountMsat: 900 * sat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := e.get(tx.ID); got.State != StateSettled || got.AmountMsat != 1*sat {
+		t.Fatalf("transaction: %+v", got)
+	}
+}
+
+// Catches: a payment the node would refuse holding funds for the whole grace.
+func TestOwnInvoiceNotInLedgerIsRefused(t *testing.T) {
+	e := newEnv(t)
+	e.start()
+	own, err := e.node.MakeInvoice(context.Background(), node.InvoiceRequest{AmountMsat: 5 * sat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: own.PaymentRequest})
+	if !errors.Is(err, ErrOwnInvoice) {
+		t.Fatalf("%v", err)
+	}
+	if e.rowCount() != 0 {
+		t.Fatalf("%d rows written", e.rowCount())
+	}
+}
+
+// removedInvoices answers "not found", like --gc-canceled-invoices-on-the-fly.
+type removedInvoices struct {
+	*fake.Node
+	removed map[string]bool
+}
+
+func (r *removedInvoices) LookupInvoice(ctx context.Context, hash string) (node.Invoice, error) {
+	if r.removed[hash] {
+		return node.Invoice{}, node.ErrNotFound
+	}
+	return r.Node.LookupInvoice(ctx, hash)
+}
+
+// Catches: rows that stay pending for ever once an index is stored, each one looked
+// up at every start.
+func TestSlowSweepClosesInvoices(t *testing.T) {
+	e := newEnv(t)
+	removed := &removedInvoices{Node: e.node, removed: map[string]bool{}}
+	e.ledger = e.fresh(removed)
+	e.start()
+	first := e.invoice(5 * sat)
+	if err := e.node.Settle(first.PaymentHash); err != nil {
+		t.Fatal(err)
+	}
+	e.waitUntil("an index is stored", func() bool { return e.index() != 0 })
+
+	canceled, gone, open := e.invoice(5*sat), e.invoice(5*sat), e.invoice(5*sat)
+	if err := e.node.CancelInvoice(context.Background(), canceled.PaymentHash); err != nil {
+		t.Fatal(err)
+	}
+	removed.removed[gone.PaymentHash] = true
+	e.sweep()
+	e.wantState(canceled.ID, StatePending) // Not due yet.
+	e.advance(catchUpEvery)
+	e.sweep()
+	e.wantState(canceled.ID, StateFailed)
+	e.wantState(gone.ID, StateFailed)
+	e.wantState(open.ID, StatePending)
 }

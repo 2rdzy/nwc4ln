@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -165,5 +166,28 @@ func TestCreateRefusesExistingFile(t *testing.T) {
 func TestOpenRefusesMissingFile(t *testing.T) {
 	if _, err := Open(context.Background(), filepath.Join(t.TempDir(), "absent.db")); err == nil {
 		t.Fatal("no error for a missing database")
+	}
+}
+
+// Catches: two processes on one data folder, whose ledgers would fail each other's
+// new payments, and a lock that stays after its owner has gone.
+func TestLockIsExclusiveUntilReleased(t *testing.T) {
+	dir := t.TempDir()
+	release, err := Lock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Lock(dir); !errors.Is(err, ErrLocked) {
+		t.Fatalf("second lock: %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Lock(dir)
+	if err != nil {
+		t.Fatalf("after release: %v", err)
+	}
+	if err := again(); err != nil {
+		t.Fatal(err)
 	}
 }
