@@ -19,7 +19,8 @@ the node. Channels, peers and on-chain funds stay with LND or Core Lightning and
 - **Ship as one binary,** written in Go, with the web UI built in. Linux `amd64` first.
 
 Testing covers the BLAKE2b chain of Bitcoin Knots only, using
-[lightning-fork](https://github.com/paulscode/lightning-fork) for LND. NWC messages and `lnbc` invoices are the same on
+[lightning-fork](https://github.com/paulscode/lightning-fork) for LND and
+[privkeyio/lightning](https://github.com/privkeyio/lightning) for Core Lightning. NWC messages and `lnbc` invoices are the same on
 any chain, and the code has no chain-specific logic, but other chains are untested.
 
 A separate small service is planned for Lightning addresses (LNURL-pay). It will use NWC to create invoices, so that
