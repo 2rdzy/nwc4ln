@@ -57,6 +57,14 @@ CREATE TABLE transactions (
 CREATE INDEX transactions_payment_hash ON transactions (payment_hash);
 CREATE INDEX transactions_account ON transactions (account_id, created_at);
 
+-- One live payment per invoice. A retry after 'failed' is allowed.
+CREATE UNIQUE INDEX transactions_one_payment ON transactions (payment_hash)
+    WHERE type = 'outgoing' AND state IN ('pending', 'settled');
+
+-- One credit per invoice.
+CREATE UNIQUE INDEX transactions_one_credit ON transactions (payment_hash)
+    WHERE type = 'incoming';
+
 CREATE TABLE settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
