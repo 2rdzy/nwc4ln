@@ -28,6 +28,14 @@ jobs:
           go-version-file: go.mod
       - name: Vet
         run: go vet ./...
+      - name: No floats in the ledger
+        run: |
+          if grep -rnE 'float(32|64)|ParseFloat' internal/ledger; then exit 1; fi
+      - name: Only the ledger writes transactions
+        run: |
+          if grep -rniE '(insert into|update|delete from) +transactions' --include='*.go' --exclude-dir=ledger .; then
+            exit 1
+          fi
       - name: Test
         run: go test -race ./...
       - name: Build without C

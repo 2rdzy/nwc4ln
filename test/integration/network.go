@@ -231,7 +231,7 @@ func (n *Network) startLND(node string) error {
 		"--bitcoind.zmqpubrawblock=tcp://"+local(n.PortBase+portZMQBlock),
 		"--bitcoind.zmqpubrawtx=tcp://"+local(n.PortBase+portZMQTx),
 		"--listen="+local(base), "--rpclisten="+local(base+1), "--restlisten="+local(base+2),
-		"--alias="+node, "--noseedbackup", "--nobootstrap", "--trickledelay=1000",
+		"--alias="+node, "--noseedbackup", "--nobootstrap", "--trickledelay=1000", "--maxbackoff=2s",
 	)
 }
 

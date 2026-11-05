@@ -55,6 +55,7 @@ type Node struct {
 	nextIndex   uint64
 	steps       []PayStep
 	cancelErrs  []error
+	streams     int
 	requests    []node.PayRequest
 	invoices    map[string]*node.Invoice        // Made on this node, by hash.
 	outside     map[string]*node.DecodedInvoice // Payable, by invoice string.
@@ -118,6 +119,14 @@ func (n *Node) PayRequests() []node.PayRequest {
 	return slices.Clone(n.requests)
 }
 
+// Streams returns how many subscriptions are open. One counts from when a
+// settlement is sure to reach it, so a test can wait for that.
+func (n *Node) Streams() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.streams
+}
+
 // OutsideInvoice makes an invoice from someone else, which Pay can pay.
 func (n *Node) OutsideInvoice(amountMsat int64) string {
 	n.mu.Lock()
@@ -158,18 +167,27 @@ func (n *Node) finish(payment *node.Payment, succeeded bool) {
 
 // Settle pays an invoice from outside, as a payer on the network would.
 func (n *Node) Settle(hash string) error {
+	return n.SettlePaid(hash, 0)
+}
+
+// SettlePaid is Settle with paidMsat received, as when a payer sends more than
+// the invoice asks. Zero means the invoice amount.
+func (n *Node) SettlePaid(hash string, paidMsat int64) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	invoice, ok := n.invoices[hash]
 	if !ok {
 		return fmt.Errorf("fake: no invoice %s", hash)
 	}
+	if paidMsat == 0 {
+		paidMsat = invoice.AmountMsat
+	}
 	if invoice.State != node.InvoiceOpen {
 		return fmt.Errorf("fake: invoice %s is not open", hash)
 	}
 	n.nextIndex++
 	invoice.State = node.InvoiceSettled
-	invoice.PaidMsat = invoice.AmountMsat
+	invoice.PaidMsat = paidMsat
 	invoice.SettleIndex = n.nextIndex
 	invoice.SettledAt = time.Now().UTC().Truncate(time.Second)
 	n.wake()
@@ -370,7 +388,13 @@ func (n *Node) SubscribeInvoices(ctx context.Context, fromSettleIndex uint64, on
 	if fromSettleIndex == 0 {
 		fromSettleIndex = n.nextIndex // Index 0 replays nothing, as on LND.
 	}
+	n.streams++
 	n.mu.Unlock()
+	defer func() {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		n.streams--
+	}()
 	for {
 		if err := n.enter(ctx); err != nil {
 			return err
