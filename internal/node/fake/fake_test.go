@@ -12,6 +12,7 @@ import (
 // Catches: the fake drifting from the real node, so later tests prove nothing.
 func TestBehaviour(t *testing.T) {
 	fake := New()
+	fake.SetSpendable(node.Spendable{ActiveMsat: 1_000_000_000, AllMsat: 1_000_000_000})
 	nodetest.Run(t, nodetest.Harness{
 		Node: fake,
 		OutsideInvoice: func(_ *testing.T, amountMsat int64) string {
@@ -23,6 +24,13 @@ func TestBehaviour(t *testing.T) {
 			}
 		},
 	})
+}
+
+// funded is a fake with money, so that payments can go out.
+func funded() *Node {
+	fake := New()
+	fake.SetSpendable(node.Spendable{ActiveMsat: 1_000_000, AllMsat: 1_000_000})
+	return fake
 }
 
 func pay(invoice string) node.PayRequest {
@@ -79,7 +87,7 @@ func TestPayLostLeavesNoRecord(t *testing.T) {
 // Catches: a retry after a failure being refused, which R9 allows.
 func TestPayFailThenRetry(t *testing.T) {
 	ctx := t.Context()
-	fake := New()
+	fake := funded()
 	fake.ScriptPay(PayFail)
 	invoice := fake.OutsideInvoice(1_000)
 	failed, err := fake.Pay(ctx, pay(invoice))
@@ -94,7 +102,7 @@ func TestPayFailThenRetry(t *testing.T) {
 // Catches: fee handling tests with no fee: the limit must bind and be recorded.
 func TestRouteFeeAgainstLimit(t *testing.T) {
 	ctx := t.Context()
-	fake := New()
+	fake := funded()
 	fake.SetRouteFee(10_000)
 	paid, err := fake.Pay(ctx, pay(fake.OutsideInvoice(1_000)))
 	if err != nil || paid.State != node.PaymentSucceeded || paid.FeeMsat != 10_000 {
@@ -159,4 +167,82 @@ func TestUnreachable(t *testing.T) {
 	if _, err := fake.Spendable(ctx); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// Catches: a sum check that passes because the fake's money never moves, or that
+// breaks because a figure moves with no money behind it.
+func TestSpendableMoney(t *testing.T) {
+	ctx := t.Context()
+	want := func(t *testing.T, fake *Node, msat int64) {
+		t.Helper()
+		got, err := fake.Spendable(ctx)
+		if err != nil || got.ActiveMsat != msat || got.AllMsat != msat {
+			t.Fatalf("spendable %+v, %v, want %d", got, err, msat)
+		}
+	}
+	t.Run("SettleAddsWhatWasPaid", func(t *testing.T) {
+		fake := funded()
+		invoice, err := fake.MakeInvoice(ctx, node.InvoiceRequest{AmountMsat: 1_000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fake.SettlePaid(invoice.Hash, 1_500); err != nil {
+			t.Fatal(err)
+		}
+		want(t, fake, 1_001_500)
+	})
+	t.Run("PayTakesAmountAndFee", func(t *testing.T) {
+		fake := funded()
+		fake.SetRouteFee(7)
+		if _, err := fake.Pay(ctx, pay(fake.OutsideInvoice(1_000))); err != nil {
+			t.Fatal(err)
+		}
+		want(t, fake, 998_993)
+	})
+	t.Run("FailedPaymentTakesNothing", func(t *testing.T) {
+		fake := funded()
+		fake.ScriptPay(PayFail)
+		if _, err := fake.Pay(ctx, pay(fake.OutsideInvoice(1_000))); err != nil {
+			t.Fatal(err)
+		}
+		want(t, fake, 1_000_000)
+	})
+	t.Run("InFlightMovesAtTheEnd", func(t *testing.T) {
+		fake := funded()
+		fake.ScriptPay(PayTimeout)
+		invoice := fake.OutsideInvoice(1_000)
+		if _, err := fake.Pay(ctx, pay(invoice)); !errors.Is(err, ErrPayTimeout) {
+			t.Fatal(err)
+		}
+		want(t, fake, 1_000_000)
+		decoded, err := fake.DecodeInvoice(ctx, invoice)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fake.Finish(decoded.Hash, true); err != nil {
+			t.Fatal(err)
+		}
+		want(t, fake, 999_000)
+	})
+	t.Run("MoreThanTheNodeHasFails", func(t *testing.T) {
+		fake := New()
+		fake.SetSpendable(node.Spendable{ActiveMsat: 1_006, AllMsat: 1_006})
+		fake.SetRouteFee(7)
+		paid, err := fake.Pay(ctx, pay(fake.OutsideInvoice(1_000)))
+		if err != nil || paid.State != node.PaymentFailed || paid.FailureReason != "FAILURE_REASON_INSUFFICIENT_BALANCE" {
+			t.Fatalf("paid %+v, %v", paid, err)
+		}
+		want(t, fake, 1_006)
+	})
+	t.Run("OwnInvoiceCannotMoveIt", func(t *testing.T) {
+		fake := funded()
+		invoice, err := fake.MakeInvoice(ctx, node.InvoiceRequest{AmountMsat: 1_000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fake.CancelInvoice(ctx, invoice.Hash); err != nil {
+			t.Fatal(err)
+		}
+		want(t, fake, 1_000_000)
+	})
 }

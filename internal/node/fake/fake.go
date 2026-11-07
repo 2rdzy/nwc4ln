@@ -94,7 +94,8 @@ func (n *Node) SetClock(now func() time.Time) {
 	n.now = now
 }
 
-// SetSpendable sets what Spendable reports.
+// SetSpendable sets what Spendable reports. After that, a finished payment and
+// income move the figure. A payment in flight does not: see Pay.
 func (n *Node) SetSpendable(spendable node.Spendable) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -168,11 +169,17 @@ func (n *Node) finish(payment *node.Payment, succeeded bool) {
 	if succeeded {
 		payment.State = node.PaymentSucceeded
 		payment.Preimage = n.preimages[payment.Hash]
+		n.moveSpendable(-(payment.AmountMsat + payment.FeeMsat))
 		return
 	}
 	payment.State = node.PaymentFailed
 	payment.FailureReason = "FAILURE_REASON_NO_ROUTE"
 	payment.FeeMsat = 0
+}
+
+func (n *Node) moveSpendable(msat int64) {
+	n.spendable.ActiveMsat += msat
+	n.spendable.AllMsat += msat
 }
 
 // Settle pays an invoice from outside, as a payer on the network would.
@@ -200,6 +207,7 @@ func (n *Node) SettlePaid(hash string, paidMsat int64) error {
 	invoice.PaidMsat = paidMsat
 	invoice.SettleIndex = n.nextIndex
 	invoice.SettledAt = n.now().UTC().Truncate(time.Second)
+	n.moveSpendable(paidMsat)
 	n.wake()
 	return nil
 }
@@ -257,6 +265,9 @@ func (n *Node) MakeInvoice(ctx context.Context, request node.InvoiceRequest) (no
 		return node.Invoice{}, err
 	}
 	defer n.mu.Unlock()
+	if len(request.Description) > 639 {
+		return node.Invoice{}, errors.New("fake: description does not fit in an invoice")
+	}
 	preimage, hash := newSecret()
 	expiry := request.ExpirySeconds
 	if expiry == 0 {
@@ -331,7 +342,9 @@ func (n *Node) DecodeInvoice(ctx context.Context, invoice string) (node.DecodedI
 	return node.DecodedInvoice{}, fmt.Errorf("fake: cannot decode invoice %q", invoice)
 }
 
-// Pay implements node.Node.
+// Pay implements node.Node. Spendable changes only at a payment's final state. LND
+// very likely lowers its figure while a payment is in flight, and the ledger then
+// counts that payment twice for a moment, which is the safe direction.
 func (n *Node) Pay(ctx context.Context, request node.PayRequest) (node.Payment, error) {
 	if err := request.Check(); err != nil {
 		return node.Payment{}, err
@@ -372,6 +385,9 @@ func (n *Node) Pay(ctx context.Context, request node.PayRequest) (node.Payment, 
 		return node.Payment{}, ErrPayTimeout
 	case step == PayFail, n.routeFee > request.FeeLimitMsat:
 		n.finish(payment, false)
+	case amount+n.routeFee > n.spendable.ActiveMsat:
+		n.finish(payment, false)
+		payment.FailureReason = "FAILURE_REASON_INSUFFICIENT_BALANCE"
 	default:
 		n.finish(payment, true)
 	}

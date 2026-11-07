@@ -28,8 +28,11 @@ func (n *Network) RelayURL() string {
 }
 
 func (n *Network) lndPort(node string) int {
-	if node == NodeLNDB {
+	switch node {
+	case NodeLNDB:
 		return n.PortBase + portLNDB
+	case NodeLNDC:
+		return n.PortBase + portLNDC
 	}
 	return n.PortBase + portLNDA
 }

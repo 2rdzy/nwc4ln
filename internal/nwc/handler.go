@@ -19,6 +19,7 @@ const (
 	codeUnauthorized          = "UNAUTHORIZED"
 	codeRestricted            = "RESTRICTED"
 	codeQuotaExceeded         = "QUOTA_EXCEEDED"
+	codeRateLimited           = "RATE_LIMITED"
 	codeInsufficientBalance   = "INSUFFICIENT_BALANCE"
 	codeNotImplemented        = "NOT_IMPLEMENTED"
 	codeUnsupportedEncryption = "UNSUPPORTED_ENCRYPTION"
@@ -64,6 +65,9 @@ type accepted struct {
 	connection connection
 	rowID      int64
 	settings   ledger.AppSettings // Set once the account has been checked.
+	// limited means the connection is over its rate. The request has no row, does no
+	// work, and only gets RATE_LIMITED.
+	limited bool
 }
 
 // accept decides whether an event is a new request for one of our connections,
@@ -92,6 +96,20 @@ func (s *Service) accept(ctx context.Context, event *nostr.Event) *accepted {
 		s.log.Info("request dropped: expired", "event", event.ID)
 		return nil
 	}
+	// A repeat spends no rate: anyone who reads the relay can copy a signed request
+	// and send it again, and that must not lock its holder out. A repeat of a running
+	// payment also gets no RATE_LIMITED, which would read as a refusal.
+	repeat, err := s.seen(ctx, event.ID)
+	if err != nil || repeat {
+		s.log.Info("request dropped: seen before", "event", event.ID, "error", err)
+		return nil
+	}
+	// Before the store, because that is a synced write on the one relay goroutine. A
+	// refused request has no row, so a later repeat could run. R9 stops a second
+	// payment, and an invoice settles only once.
+	if !s.allowed(c.id) {
+		return &accepted{event: event, connection: c, limited: true}
+	}
 	rowID, err := s.store(ctx, event, c)
 	if err != nil {
 		s.log.Error("request dropped: cannot store it", "event", event.ID, "error", err)
@@ -102,6 +120,14 @@ func (s *Service) accept(ctx context.Context, event *nostr.Event) *accepted {
 		return nil
 	}
 	return &accepted{event: event, connection: c, rowID: rowID}
+}
+
+// seen reports whether a request is stored. It only reads, through the unique index.
+func (s *Service) seen(ctx context.Context, eventID string) (bool, error) {
+	var found bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM requests WHERE nostr_event_id = ?)`,
+		eventID).Scan(&found)
+	return found, err
 }
 
 // findConnection finds the connection a request is for. The p tag names the
@@ -182,9 +208,11 @@ func (s *Service) store(ctx context.Context, event *nostr.Event, c connection) (
 // payment, not the payment, so the state is stored even then.
 func (s *Service) run(ctx context.Context, a *accepted) *nostr.Event {
 	reply, scheme, methodName, state := s.answer(ctx, a)
-	if _, err := s.db.ExecContext(context.WithoutCancel(ctx), `UPDATE requests SET method = ?, state = ? WHERE id = ?`,
-		methodName, state, a.rowID); err != nil {
-		s.log.Error("cannot record request state", "event", a.event.ID, "error", err)
+	if !a.limited {
+		if _, err := s.db.ExecContext(context.WithoutCancel(ctx), `UPDATE requests SET method = ?, state = ? WHERE id = ?`,
+			methodName, state, a.rowID); err != nil {
+			s.log.Error("cannot record request state", "event", a.event.ID, "error", err)
+		}
 	}
 	if reply == nil {
 		return nil
@@ -224,6 +252,9 @@ func (s *Service) answer(ctx context.Context, a *accepted) (*response, string, s
 	if tooOldOrNew(req.Method, a.event, s.now()) {
 		s.log.Info("request dropped: outside the time limits", "event", a.event.ID, "method", req.Method)
 		return nil, "", req.Method, stateIgnored
+	}
+	if a.limited {
+		return failure(req.Method, codeRateLimited, "too many requests, try again in a moment"), scheme, req.Method, stateFailed
 	}
 	if failed := s.checkAccess(ctx, a); failed != nil {
 		return &response{ResultType: req.Method, Error: failed}, scheme, req.Method, stateFailed

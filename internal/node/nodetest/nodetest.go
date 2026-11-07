@@ -89,6 +89,8 @@ func Run(t *testing.T, h Harness) {
 		{"RepeatPaymentIsNotFailure", testRepeatPaymentIsNotFailure},
 		{"SelfPaymentLeavesNoRecord", testSelfPaymentLeavesNoRecord},
 		{"PayRefusesZeroFeeLimit", testPayRefusesZeroFeeLimit},
+		{"SpendableFollowsMoney", testSpendableFollowsMoney},
+		{"DescriptionLimit", testDescriptionLimit},
 		{"SubscribeResumesFromIndex", testSubscribeResumesFromIndex},
 		{"SubscribeFromZeroHasNoBacklog", testSubscribeFromZeroHasNoBacklog},
 		{"SubscribeStopsOnHandlerError", testSubscribeStopsOnHandlerError},
@@ -292,6 +294,53 @@ func testPayRefusesZeroFeeLimit(t *testing.T, h Harness) {
 }
 
 // subscribe collects settled invoices until the test ends or stop is called.
+// Catches: the ledger's cap on description length differing from what a node can put
+// in an invoice, so a valid one is refused, or a long one gets a node error.
+func testDescriptionLimit(t *testing.T, h Harness) {
+	ctx := t.Context()
+	_, err := h.Node.MakeInvoice(ctx, node.InvoiceRequest{AmountMsat: amountMsat, Description: strings.Repeat("a", 639)})
+	if err != nil {
+		t.Fatalf("639 bytes: %v", err)
+	}
+	_, err = h.Node.MakeInvoice(ctx, node.InvoiceRequest{AmountMsat: amountMsat, Description: strings.Repeat("a", 640)})
+	if err == nil {
+		t.Fatal("640 bytes: the node took a description no invoice can hold")
+	}
+}
+
+// waitSpendable waits for the figure, because a node updates it after the call returns.
+func (h Harness) waitSpendable(t *testing.T, wantMsat int64) {
+	t.Helper()
+	var got int64
+	for deadline := time.Now().Add(wait); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		spendable, err := h.Node.Spendable(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got = spendable.ActiveMsat; got == wantMsat {
+			return
+		}
+	}
+	t.Fatalf("spendable %d, want %d", got, wantMsat)
+}
+
+// Catches: the fake's money differing from a real node's, so a sum check on the fake
+// proves nothing. A payment costs amount plus fee, and income adds what was paid.
+func testSpendableFollowsMoney(t *testing.T, h Harness) {
+	ctx := t.Context()
+	start, err := h.Node.Spendable(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paid, err := h.Node.Pay(ctx, request(h.OutsideInvoice(t, amountMsat)))
+	if err != nil || paid.State != node.PaymentSucceeded {
+		t.Fatalf("paid %+v, %v", paid, err)
+	}
+	h.waitSpendable(t, start.ActiveMsat-amountMsat-paid.FeeMsat)
+	h.settled(t)
+	h.waitSpendable(t, start.ActiveMsat-paid.FeeMsat)
+}
+
 func (h Harness) subscribe(t *testing.T, from uint64) (<-chan node.Invoice, context.CancelFunc) {
 	t.Helper()
 	ctx, stop := context.WithCancel(t.Context())

@@ -180,12 +180,6 @@ func usedMsat(ctx context.Context, db querier, accountID int64, since time.Time)
 	return used, err
 }
 
-// subWalletTotal is the money that belongs to sub-wallets, which R5 keeps away from
-// apps. There are no sub-wallets yet.
-func subWalletTotal(context.Context, querier) (int64, error) {
-	return 0, nil
-}
-
 // availableFrom is R5, given the node's spendable figure. It can be below 0.
 func availableFrom(ctx context.Context, db querier, spendableMsat int64) (int64, error) {
 	promised, err := subWalletTotal(ctx, db)
@@ -201,10 +195,21 @@ func availableFrom(ctx context.Context, db querier, spendableMsat int64) (int64,
 	return spendableMsat - promised - holds, nil
 }
 
-// checkFunds is R7 for an app. Exact msat comparisons, limit first.
+// checkFunds is R7. A sub-wallet needs only its own balance. An app needs its limit,
+// then the main wallet. Exact msat comparisons.
 func (l *Ledger) checkFunds(
-	ctx context.Context, db querier, accountID int64, settings AppSettings, spendableMsat, costMsat int64,
+	ctx context.Context, db querier, accountID int64, subWallet bool, settings AppSettings, spendableMsat, costMsat int64,
 ) error {
+	if subWallet {
+		balance, err := subWalletBalance(ctx, db, accountID)
+		if err != nil {
+			return err
+		}
+		if costMsat > balance {
+			return ErrInsufficientBalance
+		}
+		return nil
+	}
 	if settings.LimitMsat != nil {
 		used, err := usedMsat(ctx, db, accountID, periodStart(settings.Renewal, l.now()))
 		if err != nil {
@@ -235,13 +240,18 @@ func (l *Ledger) MainAvailable(ctx context.Context) (int64, error) {
 	return availableFrom(ctx, l.db, spendable.ActiveMsat)
 }
 
-// AppBudget returns an app's limit in the current period, or nil if it has none.
+// AppBudget returns an app's limit in the current period, or nil if it has none. A
+// sub-wallet never has one.
 func (l *Ledger) AppBudget(ctx context.Context, accountID int64) (*Budget, error) {
 	settings, err := readAccount(ctx, l.db, accountID)
 	if err != nil {
 		return nil, err
 	}
-	if settings.LimitMsat == nil {
+	subWallet, err := isSubWallet(ctx, l.db, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if subWallet || settings.LimitMsat == nil {
 		return nil, nil
 	}
 	now := l.now()

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/getAlby/go-nostr"
+	"golang.org/x/time/rate"
 
 	"github.com/2rdzy/nwc4ln/internal/ledger"
 	"github.com/2rdzy/nwc4ln/internal/node"
@@ -62,6 +63,11 @@ const (
 	// are dropped, because they are best effort and the ledger must never wait.
 	notifyQueue = 64
 
+	// A connection may send rateBurst requests at once, and rateRefill per second
+	// after that. A person's wallet stays far below this.
+	rateBurst  = 50
+	rateRefill = 5
+
 	lastSeenKey = "nwc_last_seen"
 )
 
@@ -98,6 +104,7 @@ type Service struct {
 	sendFor   time.Duration
 	sendRetry time.Duration
 	payWait   time.Duration
+	burst     int
 
 	methods map[string]method
 
@@ -111,6 +118,9 @@ type Service struct {
 	lastInfo map[int64]int64
 
 	notifications chan ledger.Transaction
+
+	limitersMu sync.Mutex
+	limiters   map[int64]*rate.Limiter // By connection ID. Lost at a restart, which is fine.
 
 	mu   sync.Mutex
 	conn *nostr.Relay // The current relay connection, or nil while there is none.
@@ -127,8 +137,9 @@ func New(
 	}
 	s := &Service{
 		db: db.DB, node: n, ledger: l, relay: relay, log: log,
-		now: time.Now, sendFor: sendFor, sendRetry: sendRetry, payWait: payWait,
+		now: time.Now, sendFor: sendFor, sendRetry: sendRetry, payWait: payWait, burst: rateBurst,
 		connections:   map[string]connection{},
+		limiters:      map[int64]*rate.Limiter{},
 		changed:       make(chan struct{}, 1),
 		lastInfo:      map[int64]int64{},
 		notifications: make(chan ledger.Transaction, notifyQueue),
@@ -200,7 +211,17 @@ func (s *Service) reload(ctx context.Context) error {
 
 // AddApp creates an app and starts serving it. See the AddApp function.
 func (s *Service) AddApp(ctx context.Context, name string, settings ledger.AppSettings) (string, error) {
-	connectionString, err := addApp(ctx, s.db, name, s.relay, settings)
+	connectionString, err := addAccount(ctx, s.db, "app", name, s.relay, settings)
+	if err != nil {
+		return "", err
+	}
+	return connectionString, s.reload(ctx)
+}
+
+// AddSubWallet creates a sub-wallet with a balance of 0 and starts serving it. The
+// connection string is the only copy of the client secret, as with AddApp.
+func (s *Service) AddSubWallet(ctx context.Context, name string) (string, error) {
+	connectionString, err := addAccount(ctx, s.db, "sub_wallet", name, s.relay, subWalletSettings())
 	if err != nil {
 		return "", err
 	}
@@ -221,6 +242,18 @@ func (s *Service) DeleteApp(ctx context.Context, accountID int64) error {
 		return err
 	}
 	return s.reload(ctx)
+}
+
+// allowed spends one of a connection's requests, and reports whether it had one.
+func (s *Service) allowed(connectionID int64) bool {
+	s.limitersMu.Lock()
+	limiter, found := s.limiters[connectionID]
+	if !found {
+		limiter = rate.NewLimiter(rateRefill, s.burst)
+		s.limiters[connectionID] = limiter
+	}
+	s.limitersMu.Unlock()
+	return limiter.AllowN(s.now(), 1)
 }
 
 // permitted decides whether settings allow a method. A connection with pay off may

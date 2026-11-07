@@ -69,7 +69,7 @@ func TestDownLeavesNothing(t *testing.T) {
 		t.Error("a second Up on the same folder passed")
 	}
 	pids := map[string]int{}
-	for _, node := range []string{NodeKnots, NodeLNDA, NodeLNDB, NodeRelay} {
+	for _, node := range []string{NodeKnots, NodeLNDA, NodeLNDB, NodeLNDC, NodeRelay} {
 		pids[node] = n.pidOf(node)
 		if pids[node] == 0 {
 			t.Errorf("%s is not running after Up", node)

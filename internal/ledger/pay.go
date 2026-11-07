@@ -97,13 +97,21 @@ func payAmount(decoded node.DecodedInvoice, requested int64) (int64, error) {
 func (l *Ledger) hold(
 	ctx context.Context, request PayRequest, invoice string, decoded node.DecodedInvoice, amount int64,
 ) (Transaction, error) {
+	// An account's type never changes, so this needs no lock.
+	subWallet, err := isSubWallet(ctx, l.db, request.AccountID)
+	if err != nil {
+		return Transaction{}, err
+	}
 	l.holdLock.Lock()
 	defer l.holdLock.Unlock()
-	read, cancel := context.WithTimeout(ctx, nodeReadTimeout)
-	spendable, err := l.node.Spendable(read)
-	cancel()
-	if err != nil {
-		return Transaction{}, fmt.Errorf("read spendable: %w", err)
+	var spendable node.Spendable
+	if !subWallet { // A sub-wallet spends its own balance, whatever the node says.
+		read, cancel := context.WithTimeout(ctx, nodeReadTimeout)
+		spendable, err = l.node.Spendable(read)
+		cancel()
+		if err != nil {
+			return Transaction{}, fmt.Errorf("read spendable: %w", err)
+		}
 	}
 	if l.afterNodeRead != nil {
 		l.afterNodeRead()
@@ -141,7 +149,8 @@ func (l *Ledger) hold(
 		}
 		reserve = Reserve(amount)
 	}
-	if err := l.checkFunds(ctx, tx, request.AccountID, settings, spendable.ActiveMsat, amount+reserve); err != nil {
+	err = l.checkFunds(ctx, tx, request.AccountID, subWallet, settings, spendable.ActiveMsat, amount+reserve)
+	if err != nil {
 		return Transaction{}, err
 	}
 	row := Transaction{
