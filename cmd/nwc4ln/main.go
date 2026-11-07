@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/2rdzy/nwc4ln/internal/config"
+	"github.com/2rdzy/nwc4ln/internal/ledger"
 	"github.com/2rdzy/nwc4ln/internal/node/lnd"
 	"github.com/2rdzy/nwc4ln/internal/nwc"
 	"github.com/2rdzy/nwc4ln/internal/store"
@@ -111,7 +112,9 @@ func runInit(ctx context.Context, configPath string, out io.Writer) error {
 }
 
 // runStart serves NWC requests until a stop signal. A relay or node that is down
-// does not stop it: the service keeps trying, and answers what it can.
+// does not stop it: the service keeps trying, and answers what it can. It joins
+// the relay only after the ledger has recovered, so that no request is answered
+// before that. It refuses to run on a node that is not the ledger's.
 func runStart(ctx context.Context, configPath string, out io.Writer) (err error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -135,12 +138,21 @@ func runStart(ctx context.Context, configPath string, out io.Writer) (err error)
 		return err
 	}
 	defer func() { err = errors.Join(err, client.Close()) }()
-	service, err := nwc.New(ctx, db, client, cfg.Relay, slog.Default())
+	money := ledger.New(db, client, slog.Default())
+	service, err := nwc.New(ctx, db, client, money, cfg.Relay, slog.Default())
 	if err != nil {
 		return err
 	}
+	money.OnSettled(service.Notify)
 	fmt.Fprintln(out, "started")
-	service.Run(ctx)
+	defer money.Close()
+	if err := money.StartRetrying(ctx); err != nil {
+		if ctx.Err() == nil {
+			return err
+		}
+	} else {
+		service.Run(ctx)
+	}
 	fmt.Fprintln(out, "stopped")
 	return nil
 }

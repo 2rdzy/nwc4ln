@@ -18,6 +18,8 @@ const (
 	codeNotImplemented        = "NOT_IMPLEMENTED"
 	codeUnsupportedEncryption = "UNSUPPORTED_ENCRYPTION"
 	codeInternal              = "INTERNAL"
+	codePaymentFailed         = "PAYMENT_FAILED"
+	codeNotFound              = "NOT_FOUND"
 	codeOther                 = "OTHER"
 )
 
@@ -28,6 +30,8 @@ const (
 	stateDone     = "done"
 	stateFailed   = "failed"
 	stateIgnored  = "ignored"
+	// statePending is a payment that had no final state when the reply went out.
+	statePending = "pending"
 )
 
 // Error is an error sent to a client.
@@ -166,10 +170,11 @@ func (s *Service) store(ctx context.Context, event *nostr.Event, c connection) (
 }
 
 // run does the work of a stored request, and returns the signed response. It
-// returns nil if the request gets no reply.
+// returns nil if the request gets no reply. The end of ctx stops the wait for a
+// payment, not the payment, so the state is stored even then.
 func (s *Service) run(ctx context.Context, a *accepted) *nostr.Event {
 	reply, scheme, methodName, state := s.answer(ctx, a)
-	if _, err := s.db.ExecContext(ctx, `UPDATE requests SET method = ?, state = ? WHERE id = ?`,
+	if _, err := s.db.ExecContext(context.WithoutCancel(ctx), `UPDATE requests SET method = ?, state = ? WHERE id = ?`,
 		methodName, state, a.rowID); err != nil {
 		s.log.Error("cannot record request state", "event", a.event.ID, "error", err)
 	}
@@ -224,7 +229,10 @@ func (s *Service) answer(ctx context.Context, a *accepted) (*response, string, s
 	if !known {
 		return failure(req.Method, codeNotImplemented, "unknown method"), scheme, req.Method, stateFailed
 	}
-	result, failed := handle(ctx, req.Params)
+	result, failed := handle(ctx, a, req.Params)
+	if failed == errPaymentPending {
+		return &response{ResultType: req.Method, Error: failed}, scheme, req.Method, statePending
+	}
 	if failed != nil {
 		return &response{ResultType: req.Method, Error: failed}, scheme, req.Method, stateFailed
 	}
@@ -253,46 +261,29 @@ func (s *Service) isRevoked(ctx context.Context, id int64) (bool, error) {
 
 // seal encrypts a reply and signs it with the connection's service key.
 func (s *Service) seal(a *accepted, reply *response, scheme string) (*nostr.Event, error) {
-	body, err := json.Marshal(reply)
+	return s.sealTo(a.connection, reply, scheme, kindResponse, nostr.Tag{"e", a.event.ID})
+}
+
+// sealTo builds an event for one connection's client.
+func (s *Service) sealTo(c connection, body any, scheme string, kind int, tags ...nostr.Tag) (*nostr.Event, error) {
+	plain, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	c, err := newCipher(scheme, a.connection.clientPub, a.connection.serviceKey)
+	sealer, err := newCipher(scheme, c.clientPub, c.serviceKey)
 	if err != nil {
 		return nil, err
 	}
-	content, err := c.encrypt(string(body))
+	content, err := sealer.encrypt(string(plain))
 	if err != nil {
 		return nil, fmt.Errorf("encrypt: %w", err)
 	}
 	event := nostr.Event{
-		Kind: kindResponse, CreatedAt: nostr.Timestamp(s.now().Unix()), Content: content,
-		Tags: nostr.Tags{{"p", a.connection.clientPub}, {"e", a.event.ID}},
+		Kind: kind, CreatedAt: nostr.Timestamp(s.now().Unix()), Content: content,
+		Tags: append(nostr.Tags{{"p", c.clientPub}}, tags...),
 	}
-	if err := event.Sign(a.connection.serviceKey); err != nil {
+	if err := event.Sign(c.serviceKey); err != nil {
 		return nil, fmt.Errorf("sign: %w", err)
 	}
 	return &event, nil
-}
-
-type getInfoResult struct {
-	Alias       string   `json:"alias"`
-	Color       string   `json:"color"`
-	PubKey      string   `json:"pubkey"`
-	Network     string   `json:"network"`
-	BlockHeight uint32   `json:"block_height"`
-	BlockHash   string   `json:"block_hash"`
-	Methods     []string `json:"methods"`
-}
-
-func (s *Service) getInfo(ctx context.Context, _ json.RawMessage) (any, *Error) {
-	info, err := s.node.Info(ctx)
-	if err != nil {
-		s.log.Error("get_info: node call failed", "error", err)
-		return nil, &Error{Code: codeInternal, Message: "the node cannot be reached"}
-	}
-	return getInfoResult{
-		Alias: info.Alias, Color: info.Color, PubKey: info.PubKey, Network: info.Network,
-		BlockHeight: info.BlockHeight, BlockHash: info.BlockHash, Methods: s.methodNames(),
-	}, nil
 }

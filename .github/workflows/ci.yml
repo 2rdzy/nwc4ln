@@ -64,6 +64,10 @@ jobs:
         with:
           path: ~/.cache/nwc4ln-it
           key: nwc4ln-it-${{ runner.os }}-${{ hashFiles('test/integration/versions.env') }}
+      # Only for the acceptance test. The SDK is pinned in its package-lock.json.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: test/integration/nwc/acceptance/.node-version
       - name: Set the data folder
         run: echo "NWC4LN_IT_DIR=$RUNNER_TEMP/nwc4ln-it" >> "$GITHUB_ENV"
       - name: Vet with the integration tag

@@ -16,19 +16,19 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: regtest up|smoke|down")
+	if len(os.Args) < 2 || (len(os.Args) > 2 && os.Args[1] != "lncli") {
+		fmt.Fprintln(os.Stderr, "usage: regtest up|smoke|down|lncli <node> <args>")
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Args[1]); err != nil {
+	if err := run(ctx, os.Args[1], os.Args[2:]); err != nil {
 		fmt.Fprintln(os.Stderr, "regtest:", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, command string) error {
+func run(ctx context.Context, command string, args []string) error {
 	cfg := integration.DefaultConfig()
 	switch command {
 	case "up":
@@ -46,6 +46,19 @@ func run(ctx context.Context, command string) error {
 			return err
 		}
 		fmt.Println("smoke passed")
+	case "lncli": // The acceptance script is Node.js, and acts as the outside party with this.
+		if len(args) < 2 {
+			return fmt.Errorf("lncli needs a node and arguments")
+		}
+		network, err := integration.Load(cfg)
+		if err != nil {
+			return err
+		}
+		output, err := network.LNCLI(ctx, args[0], args[1:]...)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s", output)
 	case "down":
 		if err := integration.Down(cfg); err != nil {
 			return err

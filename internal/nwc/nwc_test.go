@@ -13,12 +13,15 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/getAlby/go-nostr"
 
+	"github.com/2rdzy/nwc4ln/internal/ledger"
+	"github.com/2rdzy/nwc4ln/internal/node"
 	"github.com/2rdzy/nwc4ln/internal/node/fake"
 	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
 	"github.com/2rdzy/nwc4ln/internal/store"
@@ -26,11 +29,16 @@ import (
 
 const relayURL = "ws://127.0.0.1:1"
 
+var allMethods = []string{
+	"get_balance", "get_info", "list_transactions", "lookup_invoice", "make_invoice", "pay_invoice",
+}
+
 type env struct {
 	t       *testing.T
 	store   *store.Store
 	path    string
 	node    *fake.Node
+	ledger  *ledger.Ledger
 	service *Service
 	client  *nwctest.Client
 	now     *atomic.Int64
@@ -47,6 +55,7 @@ func newEnv(t *testing.T) *env {
 	e := &env{t: t, store: db, path: path, node: fake.New(), now: &atomic.Int64{}}
 	e.now.Store(time.Now().Unix())
 	e.client = e.addApp("first")
+	t.Cleanup(func() { e.ledger.Close() })
 	e.restart()
 	return e
 }
@@ -67,12 +76,34 @@ func (e *env) addApp(name string) *nwctest.Client {
 // restart builds a new service, which loads the connections again.
 func (e *env) restart() {
 	e.t.Helper()
-	service, err := New(e.t.Context(), e.store, e.node, relayURL, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	e.restartOn(e.node)
+}
+
+// restartOn is restart with the node calls going through n.
+func (e *env) restartOn(n node.Node) {
+	e.t.Helper()
+	if e.ledger != nil {
+		e.ledger.Close()
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	e.ledger = ledger.New(e.store, n, log)
+	service, err := New(e.t.Context(), e.store, n, e.ledger, relayURL, log)
 	if err != nil {
 		e.t.Fatal(err)
 	}
 	service.now = func() time.Time { return time.Unix(e.now.Load(), 0) }
 	e.service = service
+	e.ledger.OnSettled(service.Notify)
+	if err := e.ledger.Start(context.Background()); err != nil {
+		e.t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for e.node.Streams() == 0 {
+		if time.Now().After(deadline) {
+			e.t.Fatal("the invoice stream did not open")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func (e *env) timestamp() nostr.Timestamp { return nostr.Timestamp(e.now.Load()) }
@@ -364,7 +395,7 @@ func TestRevokedConnection(t *testing.T) {
 // Catches: the wrong error for each method.
 func TestUnknownMethod(t *testing.T) {
 	e := newEnv(t)
-	for _, method := range []string{"no_such_method", "pay_invoice"} {
+	for _, method := range []string{"no_such_method", "pay_keysend"} {
 		response := e.answer(e.request(nwctest.NIP44, method), nwctest.NIP44)
 		wantCode(t, response, codeNotImplemented)
 		if response.ResultType != method {
@@ -388,6 +419,8 @@ func TestGetInfo(t *testing.T) {
 		BlockHeight uint32   `json:"block_height"`
 		BlockHash   string   `json:"block_hash"`
 		Methods     []string `json:"methods"`
+		Extensions  []string `json:"extensions"`
+		Notes       []string `json:"notifications"`
 	}
 	response := e.answer(e.request(nwctest.NIP44, "get_info"), nwctest.NIP44)
 	if err := json.Unmarshal(response.Result, &got); err != nil {
@@ -397,8 +430,9 @@ func TestGetInfo(t *testing.T) {
 		got.BlockHeight != want.BlockHeight || got.BlockHash != want.BlockHash || got.Color != want.Color {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
-	if !slices.Equal(got.Methods, []string{"get_info"}) {
-		t.Errorf("methods %v", got.Methods)
+	if !slices.Equal(got.Methods, allMethods) || !slices.Equal(got.Extensions, []string{"02", "05"}) ||
+		!slices.Equal(got.Notes, []string{"payment_received", "payment_sent"}) {
+		t.Errorf("got %+v", got)
 	}
 	e.node.SetUnreachable(true)
 	wantCode(t, e.answer(e.request(nwctest.NIP44, "get_info"), nwctest.NIP44), codeInternal)
@@ -412,7 +446,8 @@ func TestInfoEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Kind != kindInfo || event.PubKey != e.client.ServicePub || event.Content != "get_info" {
+	if event.Kind != kindInfo || event.PubKey != e.client.ServicePub ||
+		event.Content != strings.Join(allMethods, " ") {
 		t.Fatalf("got %+v", event)
 	}
 	if valid, err := event.CheckSignature(); err != nil || !valid {
@@ -421,8 +456,11 @@ func TestInfoEvent(t *testing.T) {
 	if got, _ := tagValue(event, "encryption"); got != "nip44_v2 nip04" {
 		t.Fatalf("encryption %q", got)
 	}
-	if len(event.Tags) != 1 {
-		t.Fatalf("advertises more than works today: %v", event.Tags)
+	if got, _ := tagValue(event, "extensions"); got != "02 05" {
+		t.Fatalf("extensions %q", got)
+	}
+	if got, _ := tagValue(event, "notifications"); got != "payment_received payment_sent" {
+		t.Fatalf("notifications %q", got)
 	}
 }
 

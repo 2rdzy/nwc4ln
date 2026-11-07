@@ -19,6 +19,7 @@ func (s *Service) Run(ctx context.Context) {
 		<-ctx.Done()
 		return
 	}
+	s.work.Go(func() { s.notifyLoop(ctx) })
 	backoff := backoffFirst
 	for ctx.Err() == nil {
 		began := time.Now()
@@ -171,7 +172,11 @@ func (s *Service) infoEvent(c connection) (*nostr.Event, error) {
 	event := nostr.Event{
 		Kind: kindInfo, CreatedAt: nostr.Timestamp(s.now().Unix()),
 		Content: strings.Join(s.methodNames(), " "),
-		Tags:    nostr.Tags{{"encryption", encryptionTag}},
+		Tags: nostr.Tags{
+			{"encryption", encryptionTag},
+			{"notifications", strings.Join(notificationTypes, " ")},
+			{"extensions", strings.Join(extensions, " ")},
+		},
 	}
 	if err := event.Sign(c.serviceKey); err != nil {
 		return nil, fmt.Errorf("sign info event: %w", err)
