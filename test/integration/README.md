@@ -1,7 +1,8 @@
 # Integration network
 
-A throwaway BLAKE2b regtest network: one Knots node with BLAKE2b from height 1, two lightning-fork LND nodes
-(`lnd-a`, `lnd-b`) with a channel opened from each side, and a local Nostr relay (`nak serve`).
+A throwaway BLAKE2b regtest network: one Knots node with BLAKE2b from height 1, three lightning-fork LND nodes, and a
+local Nostr relay (`nak serve`). `lnd-a` and `lnd-b` have a channel opened from each side. `lnd-c` sits behind `lnd-b`,
+so a payment from `lnd-a` to `lnd-c` pays a real routing fee.
 
 ```sh
 go run ./test/integration/cmd/regtest up      # start; the first run fetches and builds, a few minutes

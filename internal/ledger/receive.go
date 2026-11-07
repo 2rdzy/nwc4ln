@@ -29,12 +29,18 @@ func (l *Ledger) MakeInvoice(ctx context.Context, request InvoiceRequest) (Trans
 	if request.AmountMsat <= 0 || request.AmountMsat > MaxAmountMsat {
 		return Transaction{}, fmt.Errorf("%w: %d", ErrBadAmount, request.AmountMsat)
 	}
+	if len(request.Description) > MaxDescriptionBytes {
+		return Transaction{}, ErrDescriptionTooLong
+	}
 	settings, err := l.checkAccount(ctx, l.db, request.AccountID)
 	if err != nil {
 		return Transaction{}, err
 	}
 	if !settings.CanInvoice {
 		return Transaction{}, ErrRestricted
+	}
+	if err := l.checkOpenInvoices(ctx, request.AccountID); err != nil {
+		return Transaction{}, err
 	}
 	invoice, err := l.node.MakeInvoice(ctx, node.InvoiceRequest{
 		AmountMsat: request.AmountMsat, Description: request.Description,
@@ -52,6 +58,24 @@ func (l *Ledger) MakeInvoice(ctx context.Context, request InvoiceRequest) (Trans
 		return Transaction{}, fmt.Errorf("store invoice: %w", err)
 	}
 	return row, nil
+}
+
+// checkOpenInvoices refuses a new invoice if the account has too many open. An
+// expired invoice is not open, even while its row is pending. The count comes before
+// the node call, so requests running at once can pass it by a few. The rate limit in
+// internal/nwc bounds how many.
+func (l *Ledger) checkOpenInvoices(ctx context.Context, accountID int64) error {
+	var open int
+	err := l.db.QueryRowContext(ctx, `SELECT count(*) FROM transactions
+		WHERE account_id = ? AND type = 'incoming' AND state = 'pending' AND expires_at > ?`,
+		accountID, l.now().Unix()).Scan(&open)
+	if err != nil {
+		return err
+	}
+	if open >= l.maxOpenInvoices {
+		return ErrTooManyInvoices
+	}
+	return nil
 }
 
 // catchUp asks the node about every pending invoice. It works the same at any

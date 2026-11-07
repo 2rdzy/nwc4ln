@@ -35,6 +35,14 @@ const (
 
 	minReserveMsat = 10_000
 
+	// MaxDescriptionBytes is the most a BOLT 11 description can hold. It also keeps a
+	// page of list_transactions under NIP-44's size limit.
+	MaxDescriptionBytes = 639
+
+	// maxOpenInvoices caps the unexpired, unpaid invoices of one account. Each one
+	// costs a node call on every pass over pending invoices.
+	maxOpenInvoices = 1_000
+
 	// payTimeout is how long the node keeps trying new routes. It is below the
 	// 60 seconds a client waits, so a payment with no route fails in that time.
 	payTimeout = 50 * time.Second
@@ -71,6 +79,10 @@ var (
 	ErrBadAmount           = errors.New("bad amount")
 	ErrBadRenewal          = errors.New("bad renewal period")
 	ErrInvoiceExpired      = errors.New("invoice has expired")
+	// ErrDescriptionTooLong means a description does not fit in an invoice.
+	ErrDescriptionTooLong = errors.New("description is too long")
+	// ErrTooManyInvoices means the account has too many open invoices.
+	ErrTooManyInvoices = errors.New("too many open invoices")
 	// ErrNotFound means the account has no transaction that matches.
 	ErrNotFound = errors.New("transaction not found")
 	// ErrAlreadyPaid means a pending or settled payment exists for the hash.
@@ -108,6 +120,8 @@ type Ledger struct {
 	retryEvery   time.Duration
 	catchUpEvery time.Duration
 	beforePay    func() // Runs after the hold is stored, before the node call.
+	// maxOpenInvoices is the constant of the same name.
+	maxOpenInvoices int
 	// afterNodeRead runs between the node read and the checks that use its figure.
 	afterNodeRead func()
 
@@ -147,7 +161,8 @@ func New(db *store.Store, n node.Node, log *slog.Logger) *Ledger {
 	return &Ledger{
 		db: db.DB, node: n, log: log,
 		now: time.Now, sweepEvery: sweepEvery, retryEvery: retryEvery, catchUpEvery: catchUpEvery,
-		attempts: map[int64]*attempt{},
+		maxOpenInvoices: maxOpenInvoices,
+		attempts:        map[int64]*attempt{},
 	}
 }
 

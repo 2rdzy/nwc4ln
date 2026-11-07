@@ -6,6 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/getAlby/go-nostr v0.0.0-20261104074428-45060cc10054
 	github.com/lightningnetwork/lnd v0.21.6-beta
+	golang.org/x/time v0.3.0
 	google.golang.org/grpc v1.83.1
 	modernc.org/sqlite v1.61.1
 )
@@ -175,7 +176,6 @@ require (
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
-	golang.org/x/time v0.3.0 // indirect
 	golang.org/x/tools v0.52.0 // indirect
 	google.golang.org/genproto v0.0.0-20231016165738-49dd2c1f3d0b // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect

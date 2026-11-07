@@ -29,6 +29,7 @@ const (
 	portZMQTx      = 5
 	portLNDA       = 10 // P2P, then gRPC at +1 and REST at +2.
 	portLNDB       = 15
+	portLNDC       = 25
 	portRelay      = 20
 )
 
@@ -37,6 +38,7 @@ const (
 	NodeKnots = "knots"
 	NodeLNDA  = "lnd-a"
 	NodeLNDB  = "lnd-b"
+	NodeLNDC  = "lnd-c"
 	NodeRelay = "relay"
 )
 
@@ -116,7 +118,8 @@ func Up(ctx context.Context, cfg Config) (*Network, error) {
 func checkPortsFree(base int) error {
 	offsets := []int{
 		portKnotsP2P, portKnotsOnion, portKnotsRPC, portZMQBlock, portZMQTx,
-		portLNDA, portLNDA + 1, portLNDA + 2, portLNDB, portLNDB + 1, portLNDB + 2, portRelay,
+		portLNDA, portLNDA + 1, portLNDA + 2, portLNDB, portLNDB + 1, portLNDB + 2,
+		portLNDC, portLNDC + 1, portLNDC + 2, portRelay,
 	}
 	for _, offset := range offsets {
 		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", base+offset))
@@ -139,7 +142,7 @@ func (n *Network) start(ctx context.Context) error {
 	if err := n.Mine(ctx, 110); err != nil {
 		return err
 	}
-	for _, node := range []string{NodeLNDA, NodeLNDB} {
+	for _, node := range []string{NodeLNDA, NodeLNDB, NodeLNDC} {
 		if err := n.StartNode(ctx, node); err != nil {
 			return err
 		}
@@ -190,7 +193,7 @@ testactivationheight=blake2b@1
 // StartNode starts an LND node or the relay, and waits until it answers.
 func (n *Network) StartNode(ctx context.Context, node string) error {
 	switch node {
-	case NodeLNDA, NodeLNDB:
+	case NodeLNDA, NodeLNDB, NodeLNDC:
 		if err := n.startLND(node); err != nil {
 			return err
 		}
@@ -278,15 +281,47 @@ func (n *Network) openChannels(ctx context.Context) error {
 	if _, err := n.LNCLI(ctx, NodeLNDB, "openchannel", "--node_key", infoA.PubKey, "--local_amt", "1000000"); err != nil {
 		return err
 	}
+	if err := n.Mine(ctx, 1); err != nil {
+		return err
+	}
+	if err := n.openChannelToC(ctx); err != nil {
+		return err
+	}
 	if err := n.Mine(ctx, 6); err != nil {
 		return err
 	}
-	return n.WaitChannels(ctx)
+	if err := n.WaitChannels(ctx); err != nil {
+		return err
+	}
+	// Spendable counts a channel below its reserve as 0, so income on one would not
+	// show. Move lnd-a's channel from lnd-b well above its 10,000 sat reserve.
+	if err := n.Pay(ctx, NodeLNDB, NodeLNDA, 50_000); err != nil {
+		return err
+	}
+	return n.WaitRouted(ctx)
+}
+
+// openChannelToC puts lnd-c behind lnd-b, so that a payment from lnd-a to it pays a
+// real routing fee.
+func (n *Network) openChannelToC(ctx context.Context) error {
+	if err := n.waitSynced(ctx); err != nil {
+		return err
+	}
+	infoC, err := n.getInfo(ctx, NodeLNDC)
+	if err != nil {
+		return err
+	}
+	address := fmt.Sprintf("%s@127.0.0.1:%d", infoC.PubKey, n.lndPort(NodeLNDC))
+	if _, err := n.LNCLI(ctx, NodeLNDB, "connect", address); err != nil {
+		return err
+	}
+	_, err = n.LNCLI(ctx, NodeLNDB, "openchannel", "--node_key", infoC.PubKey, "--local_amt", "1000000")
+	return err
 }
 
 func (n *Network) waitSynced(ctx context.Context) error {
 	return n.waitFor(ctx, "", "LND nodes to sync", func() error {
-		for _, node := range []string{NodeLNDA, NodeLNDB} {
+		for _, node := range []string{NodeLNDA, NodeLNDB, NodeLNDC} {
 			info, err := n.getInfo(ctx, node)
 			if err != nil {
 				return err
@@ -312,6 +347,15 @@ func (n *Network) WaitChannels(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// WaitRouted returns once lnd-a can pay lnd-c through lnd-b. lnd-a must first hear of
+// that channel by gossip. Call it after restarting either node in a test that needs
+// the route.
+func (n *Network) WaitRouted(ctx context.Context) error {
+	return n.waitFor(ctx, "", "payment from lnd-a to lnd-c", func() error {
+		return n.Pay(ctx, NodeLNDA, NodeLNDC, 1)
+	})
 }
 
 // waitFor polls check until it passes. If node is set and has died, it stops
@@ -419,7 +463,7 @@ func (n *Network) waitExit(node string, limit time.Duration) bool {
 
 func (n *Network) stopAll() error {
 	var errs []error
-	for _, node := range []string{NodeRelay, NodeLNDB, NodeLNDA, NodeKnots} {
+	for _, node := range []string{NodeRelay, NodeLNDC, NodeLNDB, NodeLNDA, NodeKnots} {
 		errs = append(errs, n.StopNode(node))
 	}
 	return errors.Join(errs...)

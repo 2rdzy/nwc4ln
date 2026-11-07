@@ -36,14 +36,20 @@ func CheckRelay(relay string) error {
 func AddApp(
 	ctx context.Context, db *store.Store, name, relay string, settings ledger.AppSettings,
 ) (connectionString string, err error) {
-	return addApp(ctx, db.DB, name, relay, settings)
+	return addAccount(ctx, db.DB, "app", name, relay, settings)
 }
 
-func addApp(
-	ctx context.Context, db *sql.DB, name, relay string, settings ledger.AppSettings,
+// subWalletSettings are fixed: a sub-wallet has no limit or expiry, and every
+// command stays on. Nothing can edit them.
+func subWalletSettings() ledger.AppSettings {
+	return ledger.AppSettings{Renewal: ledger.RenewNever, CanPay: true, CanInvoice: true}
+}
+
+func addAccount(
+	ctx context.Context, db *sql.DB, kind, name, relay string, settings ledger.AppSettings,
 ) (connectionString string, err error) {
 	if name == "" {
-		return "", errors.New("app name is required")
+		return "", errors.New("name is required")
 	}
 	if err := settings.Check(); err != nil {
 		return "", err
@@ -67,21 +73,21 @@ func addApp(
 	now := nostr.Now()
 	result, err := tx.ExecContext(ctx, `INSERT INTO accounts
 		(type, name, limit_msat, renewal, expires_at, can_pay, can_invoice, created_at)
-		VALUES ('app', ?, ?, ?, ?, ?, ?, ?)`, name, settings.LimitColumn(), settings.Renewal, settings.ExpiryColumn(),
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, kind, name, settings.LimitColumn(), settings.Renewal, settings.ExpiryColumn(),
 		settings.CanPay, settings.CanInvoice, int64(now))
 	if err != nil {
-		return "", fmt.Errorf("add app: %w", err)
+		return "", fmt.Errorf("add account: %w", err)
 	}
 	account, err := result.LastInsertId()
 	if err != nil {
-		return "", fmt.Errorf("add app: %w", err)
+		return "", fmt.Errorf("add account: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO connections (account_id, client_pubkey, service_key, role, created_at)
 		VALUES (?, ?, ?, 'full', ?)`, account, clientPub, serviceKey, int64(now)); err != nil {
 		return "", fmt.Errorf("add connection: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("add app: %w", err)
+		return "", fmt.Errorf("add account: %w", err)
 	}
 	query := url.Values{"relay": {relay}, "secret": {clientSecret}}
 	return "nostr+walletconnect://" + servicePub + "?" + query.Encode(), nil

@@ -109,7 +109,7 @@ type balanceResult struct {
 }
 
 func (s *Service) getBalance(ctx context.Context, a *accepted, _ json.RawMessage) (any, *Error) {
-	balance, err := s.ledger.AppBalance(ctx, a.connection.accountID)
+	balance, err := s.ledger.Balance(ctx, a.connection.accountID)
 	if err != nil {
 		s.log.Error("get_balance failed", "error", err)
 		return nil, &Error{Code: codeInternal, Message: "the balance cannot be read"}
@@ -194,6 +194,10 @@ func (s *Service) refused(command string, err error) *Error {
 		return &Error{Code: codeQuotaExceeded, Message: "over the spending limit"}
 	case errors.Is(err, ledger.ErrInsufficientBalance):
 		return &Error{Code: codeInsufficientBalance, Message: "not enough funds, including the fee reserve"}
+	case errors.Is(err, ledger.ErrTooManyInvoices):
+		return &Error{Code: codeRateLimited, Message: "too many open invoices, wait for some to expire"}
+	case errors.Is(err, ledger.ErrDescriptionTooLong):
+		message = "description is too long"
 	case errors.Is(err, ledger.ErrAlreadyPaid):
 		message = "this invoice is already paid or being paid"
 	case errors.Is(err, ledger.ErrInvoiceClosed):
