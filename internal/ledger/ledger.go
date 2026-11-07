@@ -293,7 +293,8 @@ func (l *Ledger) sweepLoop(ctx context.Context) {
 
 // sweep is one pass over the unfinished work. See catchUp for why invoices are
 // checked while the settle index is 0. After that they are checked now and then,
-// which closes rows the stream never reports: expired, canceled or removed.
+// which closes rows the stream never reports: expired, canceled or removed. Each pass
+// also finishes deleted sub-wallets.
 func (l *Ledger) sweep(ctx context.Context) error {
 	index, err := settleIndex(ctx, l.db)
 	if err != nil {
@@ -303,7 +304,9 @@ func (l *Ledger) sweep(ctx context.Context) error {
 	if index == 0 || l.passDue() {
 		catchUpErr = l.catchUp(ctx)
 	}
-	return errors.Join(catchUpErr, l.trackPending(ctx))
+	trackErr := l.trackPending(ctx)
+	// After the payments, so that what they just released moves in this pass.
+	return errors.Join(catchUpErr, trackErr, l.finishDeleted(ctx))
 }
 
 func (l *Ledger) passDue() bool {

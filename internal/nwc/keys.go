@@ -57,11 +57,7 @@ func addAccount(
 	if err := CheckRelay(relay); err != nil {
 		return "", err
 	}
-	serviceKey, servicePub, err := newKey()
-	if err != nil {
-		return "", err
-	}
-	clientSecret, clientPub, err := newKey()
+	fresh, err := newCredentials(relay)
 	if err != nil {
 		return "", err
 	}
@@ -82,15 +78,80 @@ func addAccount(
 	if err != nil {
 		return "", fmt.Errorf("add account: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO connections (account_id, client_pubkey, service_key, role, created_at)
-		VALUES (?, ?, ?, 'full', ?)`, account, clientPub, serviceKey, int64(now)); err != nil {
-		return "", fmt.Errorf("add connection: %w", err)
+	if err := fresh.store(ctx, tx, account, int64(now)); err != nil {
+		return "", err
 	}
 	if err := tx.Commit(); err != nil {
 		return "", fmt.Errorf("add account: %w", err)
 	}
+	return fresh.connectionString, nil
+}
+
+// replaceConnection gives a sub-wallet a new connection and revokes the old one in one
+// step. The balance and history belong to the account, so they stay. The service key
+// is new too, because the service finds a connection by that key. A receive-only
+// connection is not touched.
+func replaceConnection(ctx context.Context, db *sql.DB, accountID int64, relay string) (connectionString string, err error) {
+	fresh, err := newCredentials(relay)
+	if err != nil {
+		return "", err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }() // Does nothing after a commit.
+	var found bool
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM accounts
+		WHERE id = ? AND type = 'sub_wallet' AND deleted_at IS NULL)`, accountID).Scan(&found)
+	if err != nil {
+		return "", fmt.Errorf("find account: %w", err)
+	}
+	if !found {
+		return "", ledger.ErrUnknownAccount
+	}
+	now := int64(nostr.Now())
+	if _, err := tx.ExecContext(ctx, `UPDATE connections SET revoked_at = ?
+		WHERE account_id = ? AND role = 'full' AND revoked_at IS NULL`, now, accountID); err != nil {
+		return "", fmt.Errorf("revoke connection: %w", err)
+	}
+	if err := fresh.store(ctx, tx, accountID, now); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("replace connection: %w", err)
+	}
+	return fresh.connectionString, nil
+}
+
+// credentials are the keys of a new connection. connectionString is the only copy of
+// the client secret.
+type credentials struct {
+	serviceKey, clientPub, connectionString string
+}
+
+func newCredentials(relay string) (credentials, error) {
+	serviceKey, servicePub, err := newKey()
+	if err != nil {
+		return credentials{}, err
+	}
+	clientSecret, clientPub, err := newKey()
+	if err != nil {
+		return credentials{}, err
+	}
 	query := url.Values{"relay": {relay}, "secret": {clientSecret}}
-	return "nostr+walletconnect://" + servicePub + "?" + query.Encode(), nil
+	return credentials{
+		serviceKey: serviceKey, clientPub: clientPub,
+		connectionString: "nostr+walletconnect://" + servicePub + "?" + query.Encode(),
+	}, nil
+}
+
+func (c credentials) store(ctx context.Context, tx *sql.Tx, accountID, now int64) error {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO connections (account_id, client_pubkey, service_key, role, created_at)
+		VALUES (?, ?, ?, 'full', ?)`, accountID, c.clientPub, c.serviceKey, now); err != nil {
+		return fmt.Errorf("add connection: %w", err)
+	}
+	return nil
 }
 
 func newKey() (secret, public string, err error) {

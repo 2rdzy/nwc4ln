@@ -244,6 +244,26 @@ func (s *Service) DeleteApp(ctx context.Context, accountID int64) error {
 	return s.reload(ctx)
 }
 
+// DeleteSubWallet revokes a sub-wallet at once, and keeps its history. The ledger's
+// sweep then moves its balance to the main wallet.
+func (s *Service) DeleteSubWallet(ctx context.Context, accountID int64) error {
+	if err := s.ledger.DeleteSubWallet(ctx, accountID); err != nil {
+		return err
+	}
+	return s.reload(ctx)
+}
+
+// ReplaceConnection gives a sub-wallet a new connection string and kills the old one.
+// The balance and history stay. The string is the only copy of the client secret, as
+// with AddApp.
+func (s *Service) ReplaceConnection(ctx context.Context, accountID int64) (string, error) {
+	connectionString, err := replaceConnection(ctx, s.db, accountID, s.relay)
+	if err != nil {
+		return "", err
+	}
+	return connectionString, s.reload(ctx)
+}
+
 // allowed spends one of a connection's requests, and reports whether it had one.
 func (s *Service) allowed(connectionID int64) bool {
 	s.limitersMu.Lock()
