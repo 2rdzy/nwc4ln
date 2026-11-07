@@ -10,11 +10,16 @@ import (
 	"time"
 
 	"github.com/getAlby/go-nostr"
+
+	"github.com/2rdzy/nwc4ln/internal/ledger"
 )
 
 // Error codes from NIP-47.
 const (
 	codeUnauthorized          = "UNAUTHORIZED"
+	codeRestricted            = "RESTRICTED"
+	codeQuotaExceeded         = "QUOTA_EXCEEDED"
+	codeInsufficientBalance   = "INSUFFICIENT_BALANCE"
 	codeNotImplemented        = "NOT_IMPLEMENTED"
 	codeUnsupportedEncryption = "UNSUPPORTED_ENCRYPTION"
 	codeInternal              = "INTERNAL"
@@ -58,6 +63,7 @@ type accepted struct {
 	event      *nostr.Event
 	connection connection
 	rowID      int64
+	settings   ledger.AppSettings // Set once the account has been checked.
 }
 
 // accept decides whether an event is a new request for one of our connections,
@@ -101,6 +107,8 @@ func (s *Service) accept(ctx context.Context, event *nostr.Event) *accepted {
 // findConnection finds the connection a request is for. The p tag names the
 // service key, and the event must be signed by that connection's client key.
 func (s *Service) findConnection(event *nostr.Event) (connection, bool) {
+	s.connectionsMu.RLock()
+	defer s.connectionsMu.RUnlock()
 	for _, tag := range event.Tags {
 		if len(tag) < 2 || tag[0] != "p" {
 			continue
@@ -217,17 +225,15 @@ func (s *Service) answer(ctx context.Context, a *accepted) (*response, string, s
 		s.log.Info("request dropped: outside the time limits", "event", a.event.ID, "method", req.Method)
 		return nil, "", req.Method, stateIgnored
 	}
-	revoked, err := s.isRevoked(ctx, a.connection.id)
-	if err != nil {
-		s.log.Error("cannot read connection", "event", a.event.ID, "error", err)
-		return failure(req.Method, codeInternal, "internal error"), scheme, req.Method, stateFailed
-	}
-	if revoked {
-		return failure(req.Method, codeUnauthorized, "this connection is revoked"), scheme, req.Method, stateFailed
+	if failed := s.checkAccess(ctx, a); failed != nil {
+		return &response{ResultType: req.Method, Error: failed}, scheme, req.Method, stateFailed
 	}
 	handle, known := s.methods[req.Method]
 	if !known {
 		return failure(req.Method, codeNotImplemented, "unknown method"), scheme, req.Method, stateFailed
+	}
+	if !permitted(req.Method, a.settings.CanPay, a.settings.CanInvoice) {
+		return failure(req.Method, codeRestricted, "this app may not do that"), scheme, req.Method, stateFailed
 	}
 	result, failed := handle(ctx, a, req.Params)
 	if failed == errPaymentPending {
@@ -251,6 +257,31 @@ func tooOldOrNew(method string, event *nostr.Event, now time.Time) bool {
 	}
 	age := now.Unix() - int64(event.CreatedAt)
 	return age > int64(maxAge/time.Second) || age < -int64(maxFuture/time.Second)
+}
+
+// checkAccess reads the connection and its account for this one request, so that a
+// revoke, delete, expiry or edit applies from the next request on. It stores the
+// settings in the request.
+func (s *Service) checkAccess(ctx context.Context, a *accepted) *Error {
+	revoked, err := s.isRevoked(ctx, a.connection.id)
+	if err != nil {
+		s.log.Error("cannot read connection", "event", a.event.ID, "error", err)
+		return &Error{Code: codeInternal, Message: "internal error"}
+	}
+	if revoked {
+		return &Error{Code: codeUnauthorized, Message: "this connection is revoked"}
+	}
+	a.settings, err = s.ledger.Access(ctx, a.connection.accountID)
+	switch {
+	case errors.Is(err, ledger.ErrAccountExpired):
+		return &Error{Code: codeUnauthorized, Message: "this app has expired"}
+	case errors.Is(err, ledger.ErrAccountDeleted), errors.Is(err, ledger.ErrUnknownAccount):
+		return &Error{Code: codeUnauthorized, Message: "this account is deleted"}
+	case err != nil:
+		s.log.Error("cannot read account", "event", a.event.ID, "error", err)
+		return &Error{Code: codeInternal, Message: "internal error"}
+	}
+	return nil
 }
 
 func (s *Service) isRevoked(ctx context.Context, id int64) (bool, error) {

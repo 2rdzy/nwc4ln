@@ -7,7 +7,7 @@ import { NWCClient } from "@getalby/sdk/nwc";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
-const { NWC_FIRST, NWC_SECOND, REGTEST } = process.env;
+const { NWC_FIRST, NWC_SECOND, NWC_SECOND_LIMIT, REGTEST } = process.env;
 const lnb = (...args) => execFileSync(REGTEST, ["lncli", "lnd-b", ...args], { encoding: "utf8", timeout: 60_000 });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const makeOutsideInvoice = (sats) => JSON.parse(lnb("addinvoice", "--amt", String(sats))).payment_request;
@@ -118,6 +118,23 @@ await check("pay own invoice (inside the ledger)", async () => {
   return paid;
 });
 
+await check("get_budget with no limit is empty", async () => {
+  const budget = await first.getBudget();
+  must(Object.keys(budget).length === 0, JSON.stringify(budget));
+  return budget;
+});
+await check("get_budget with a limit", async () => {
+  const budget = await second.getBudget();
+  must(budget.total_budget === Number(NWC_SECOND_LIMIT), JSON.stringify(budget));
+  must(budget.used_budget === 0 && budget.renewal_period === "monthly", JSON.stringify(budget));
+  must(budget.renews_at * 1000 > Date.now(), JSON.stringify(budget));
+  return budget;
+});
+await check("get_balance stops at the limit", async () => {
+  const { balance } = await second.getBalance();
+  must(balance === Number(NWC_SECOND_LIMIT), "balance " + balance);
+  return balance;
+});
 await check("second app sees none of it", async () => {
   const { transactions } = await second.listTransactions({ limit: 10, unpaid: true });
   must(transactions.length === 0, "shows " + transactions.length);

@@ -128,6 +128,7 @@ func TestCommandShapes(t *testing.T) {
 // there even at 0.
 func TestEmptyResultsKeepTheirFields(t *testing.T) {
 	e := newEnv(t)
+	e.node.SetSpendable(node.Spendable{})
 	response := e.call(e.client, "list_transactions", nil)
 	if !strings.Contains(string(response.Result), `"transactions":[]`) {
 		t.Errorf("list_transactions: %s", response.Result)

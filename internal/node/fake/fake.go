@@ -48,6 +48,7 @@ const pubKey = "02fake"
 // Node is the fake. The zero value is not usable: call New.
 type Node struct {
 	mu          sync.Mutex
+	now         func() time.Time
 	changed     chan struct{} // Closed and replaced on each settlement or outage.
 	unreachable bool
 	spendable   node.Spendable
@@ -68,6 +69,7 @@ var _ node.Node = (*Node)(nil)
 // New returns a reachable fake with no money and no invoices.
 func New() *Node {
 	return &Node{
+		now:       time.Now,
 		changed:   make(chan struct{}),
 		invoices:  map[string]*node.Invoice{},
 		outside:   map[string]*node.DecodedInvoice{},
@@ -82,6 +84,14 @@ func (n *Node) SetUnreachable(unreachable bool) {
 	defer n.mu.Unlock()
 	n.unreachable = unreachable
 	n.wake()
+}
+
+// SetClock sets the clock that stamps invoices, for a test that moves time. Call it
+// before anything else runs.
+func (n *Node) SetClock(now func() time.Time) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.now = now
 }
 
 // SetSpendable sets what Spendable reports.
@@ -133,7 +143,7 @@ func (n *Node) OutsideInvoice(amountMsat int64) string {
 	defer n.mu.Unlock()
 	preimage, hash := newSecret()
 	n.preimages[hash] = preimage
-	now := time.Now().UTC().Truncate(time.Second)
+	now := n.now().UTC().Truncate(time.Second)
 	invoice := "lnfake-outside-" + hash
 	n.outside[invoice] = &node.DecodedInvoice{
 		Hash: hash, AmountMsat: amountMsat, Destination: "03outside",
@@ -189,7 +199,7 @@ func (n *Node) SettlePaid(hash string, paidMsat int64) error {
 	invoice.State = node.InvoiceSettled
 	invoice.PaidMsat = paidMsat
 	invoice.SettleIndex = n.nextIndex
-	invoice.SettledAt = time.Now().UTC().Truncate(time.Second)
+	invoice.SettledAt = n.now().UTC().Truncate(time.Second)
 	n.wake()
 	return nil
 }
@@ -252,7 +262,7 @@ func (n *Node) MakeInvoice(ctx context.Context, request node.InvoiceRequest) (no
 	if expiry == 0 {
 		expiry = 86400 // LND's default for a new invoice.
 	}
-	now := time.Now().UTC().Truncate(time.Second)
+	now := n.now().UTC().Truncate(time.Second)
 	invoice := &node.Invoice{
 		Hash: hash, Preimage: preimage, PaymentRequest: "lnfake-" + hash, AmountMsat: request.AmountMsat,
 		Description: request.Description, DescriptionHash: request.DescriptionHash,

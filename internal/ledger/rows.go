@@ -201,22 +201,6 @@ func (l *Ledger) Lookup(ctx context.Context, accountID int64, hash, invoice stri
 	return rows[0], nil
 }
 
-// MainAvailable is what the node can send now, less every hold. It can be below
-// 0. It fails if the node cannot be asked, so nobody is shown a guess.
-func (l *Ledger) MainAvailable(ctx context.Context) (int64, error) {
-	spendable, err := l.node.Spendable(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("read spendable: %w", err)
-	}
-	var holds int64
-	err = l.db.QueryRowContext(ctx, `SELECT coalesce(sum(amount_msat + reserve_msat), 0) FROM transactions
-		WHERE type = 'outgoing' AND state = 'pending'`).Scan(&holds)
-	if err != nil {
-		return 0, err
-	}
-	return spendable.ActiveMsat - holds, nil
-}
-
 func changedOne(result sql.Result, err error) (bool, error) {
 	if err != nil {
 		return false, err

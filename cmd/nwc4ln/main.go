@@ -175,7 +175,9 @@ func runAppAdd(ctx context.Context, configPath, name string, canInvoice bool, ou
 		return err
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
-	connectionString, err := nwc.AddApp(ctx, db, name, cfg.Relay, canInvoice)
+	settings := ledger.DefaultApp()
+	settings.CanInvoice = canInvoice
+	connectionString, err := nwc.AddApp(ctx, db, name, cfg.Relay, settings)
 	if err != nil {
 		return err
 	}

@@ -21,6 +21,9 @@ import (
 
 const sat = int64(1_000)
 
+// testFunds is more than any test spends, unless it sets its own figure.
+const testFunds = 1_000_000_000 * sat
+
 // env is one ledger on a real SQLite file and the fake. The loops are slowed down,
 // so a test decides when a sweep runs by calling it.
 type env struct {
@@ -41,6 +44,7 @@ func newEnv(t *testing.T) *env {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	e := &env{t: t, store: db, node: fake.New(), now: &atomic.Int64{}}
+	e.node.SetSpendable(node.Spendable{ActiveMsat: testFunds, AllMsat: testFunds})
 	e.now.Store(time.Now().Unix())
 	result, err := db.DB.ExecContext(ctx, `INSERT INTO accounts (type, name, can_pay, can_invoice, created_at)
 		VALUES ('app', 'test', 1, 1, 0)`)
