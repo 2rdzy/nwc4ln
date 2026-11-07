@@ -38,6 +38,9 @@ jobs:
           if grep -rniE '(insert into|update|delete from) +transactions' --include='*.go' --exclude-dir=ledger .; then
             exit 1
           fi
+      - name: Only internal/nwc uses go-nostr
+        run: |
+          if grep -rl 'getAlby/go-nostr' --include='*.go' . | grep -v '^./internal/nwc/'; then exit 1; fi
       - name: Test
         run: go test -race ./...
       - name: Build without C
