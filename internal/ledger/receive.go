@@ -188,5 +188,11 @@ func (l *Ledger) credit(ctx context.Context, invoice node.Invoice, storeIndex bo
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if credited {
+		l.settledInvoice(ctx, invoice.Hash)
+	}
+	return nil
 }

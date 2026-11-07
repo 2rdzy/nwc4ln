@@ -271,8 +271,12 @@ func (l *Ledger) applySuccess(ctx context.Context, row Transaction, payment node
 		l.log.Error("fee above the reserve", "hash", row.PaymentHash, "fee", payment.FeeMsat, "reserve", row.ReserveMsat)
 	}
 	moved, err := settleOutgoing(ctx, l.db, row.ID, amount, payment.FeeMsat, payment.Preimage, l.now())
-	if err != nil || moved {
+	if err != nil {
 		return err
+	}
+	if moved {
+		l.settled(ctx, row.ID)
+		return nil
 	}
 	current, err := l.transaction(ctx, row.ID)
 	if err != nil {
@@ -323,5 +327,8 @@ func (l *Ledger) settleInternal(ctx context.Context, row Transaction) {
 	// pending, the node has no record of it, and it fails on the next check.
 	if err := settleBothSides(ctx, l.db, row, l.now()); err != nil {
 		l.log.Error("settle internal payment", "hash", row.PaymentHash, "error", err)
+		return
 	}
+	l.settled(ctx, row.ID)
+	l.settledInvoice(ctx, row.PaymentHash)
 }

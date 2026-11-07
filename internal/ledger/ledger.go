@@ -59,6 +59,8 @@ var (
 	ErrAccountDeleted = errors.New("account is deleted")
 	ErrBadAmount      = errors.New("bad amount")
 	ErrInvoiceExpired = errors.New("invoice has expired")
+	// ErrNotFound means the account has no transaction that matches.
+	ErrNotFound = errors.New("transaction not found")
 	// ErrAlreadyPaid means a pending or settled payment exists for the hash.
 	ErrAlreadyPaid = errors.New("invoice is already paid or being paid")
 	// ErrInvoiceClosed means the invoice is from this node and can no longer be paid.
@@ -95,6 +97,9 @@ type Ledger struct {
 	catchUpEvery time.Duration
 	beforePay    func() // Runs after the hold is stored, before the node call.
 
+	// settledHook is set before Start, and read without a lock after that.
+	settledHook func(Transaction)
+
 	// holdLock covers the check and the insert of a payment, so that two payments
 	// at once cannot both pass. Payments to the node run outside it.
 	holdLock sync.Mutex
@@ -125,6 +130,59 @@ func New(db *store.Store, n node.Node, log *slog.Logger) *Ledger {
 		db: db.DB, node: n, log: log,
 		now: time.Now, sweepEvery: sweepEvery, retryEvery: retryEvery, catchUpEvery: catchUpEvery,
 		attempts: map[int64]*attempt{},
+	}
+}
+
+// OnSettled sets what to call when a row turns settled. It is called after the
+// commit, once per row, whichever path settled it, and with no database
+// transaction open. It runs on the ledger's own goroutines, so it must not block.
+// A stop between the commit and the call loses the call. Set it before Start.
+func (l *Ledger) OnSettled(call func(Transaction)) {
+	l.settledHook = call
+}
+
+// settled reports a row that has just turned settled.
+func (l *Ledger) settled(ctx context.Context, id int64) {
+	if l.settledHook == nil {
+		return
+	}
+	row, err := l.transaction(context.WithoutCancel(ctx), id)
+	if err != nil {
+		l.log.Warn("read settled row", "id", id, "error", err)
+		return
+	}
+	l.settledHook(row)
+}
+
+// settledInvoice is settled for the incoming row of a hash.
+func (l *Ledger) settledInvoice(ctx context.Context, hash string) {
+	var id int64
+	err := l.db.QueryRowContext(context.WithoutCancel(ctx),
+		`SELECT id FROM transactions WHERE payment_hash = ? AND type = 'incoming'`, hash).Scan(&id)
+	if err != nil {
+		l.log.Warn("read settled invoice", "hash", hash, "error", err)
+		return
+	}
+	l.settled(ctx, id)
+}
+
+// StartRetrying calls Start until it works or ctx ends. A node that is down is
+// normal at boot. A node that changed is not, so that error comes back at once.
+func (l *Ledger) StartRetrying(ctx context.Context) error {
+	for {
+		err := l.Start(ctx)
+		if err == nil || errors.Is(err, ErrNodeChanged) {
+			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		l.log.Warn("ledger cannot start yet", "error", err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(l.retryEvery):
+		}
 	}
 }
 

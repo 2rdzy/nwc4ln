@@ -645,7 +645,7 @@ func TestIncomeInHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.waitState(in.ID, StateSettled)
-	history, err := e.ledger.History(context.Background(), e.acct)
+	history, _, err := e.ledger.History(context.Background(), HistoryQuery{AccountID: e.acct, Unpaid: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -902,4 +902,205 @@ func TestSlowSweepClosesInvoices(t *testing.T) {
 	e.wantState(canceled.ID, StateFailed)
 	e.wantState(gone.ID, StateFailed)
 	e.wantState(open.ID, StatePending)
+}
+
+// settledLog records what OnSettled reports.
+type settledLog struct {
+	mu   sync.Mutex
+	rows []Transaction
+}
+
+func (s *settledLog) add(row Transaction) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rows = append(s.rows, row)
+}
+
+func (s *settledLog) list() []Transaction {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Transaction(nil), s.rows...)
+}
+
+// Catches: a notification that fires only for payments the client waited on. Income
+// and anything found by a sweep or a restart must report too, and each row once.
+func TestOnSettledCoversEveryPath(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	log := &settledLog{}
+	e.ledger.OnSettled(log.add)
+	e.start()
+	wantLast := func(path string, count int, kind, hash string) {
+		t.Helper()
+		e.waitUntil(path, func() bool { return len(log.list()) >= count })
+		rows := log.list()
+		last := rows[len(rows)-1]
+		if len(rows) != count || last.Type != kind || last.PaymentHash != hash || last.State != StateSettled {
+			t.Fatalf("%s: got %+v", path, rows)
+		}
+	}
+
+	paid := e.pay(e.node.OutsideInvoice(1_000 * sat))
+	wantLast("Pay's own result", 1, TypeOutgoing, paid.PaymentHash)
+
+	e.node.ScriptPay(fake.PayTimeout)
+	slow := e.pay(e.node.OutsideInvoice(1_000 * sat))
+	if slow.State != StatePending {
+		t.Fatalf("got %+v", slow)
+	}
+	if err := e.node.Finish(slow.PaymentHash, true); err != nil {
+		t.Fatal(err)
+	}
+	e.sweep()
+	e.sweep() // A second look at the same payment must not report it again.
+	wantLast("the sweep", 2, TypeOutgoing, slow.PaymentHash)
+
+	income, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, AmountMsat: 1_000 * sat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.node.Settle(income.PaymentHash); err != nil {
+		t.Fatal(err)
+	}
+	wantLast("the stream", 3, TypeIncoming, income.PaymentHash)
+
+	own, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, AmountMsat: 1_000 * sat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.pay(own.Invoice)
+	wantLast("the internal payment", 5, TypeIncoming, own.PaymentHash)
+	if rows := log.list(); rows[3].Type != TypeOutgoing || rows[3].PaymentHash != own.PaymentHash {
+		t.Fatalf("payer side: %+v", rows[3])
+	}
+
+	down, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, AmountMsat: 1_000 * sat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.ledger.Close()
+	if err := e.node.Settle(down.PaymentHash); err != nil {
+		t.Fatal(err)
+	}
+	e.ledger = e.fresh(e.node)
+	e.ledger.OnSettled(log.add)
+	e.start()
+	wantLast("the catch-up", 6, TypeIncoming, down.PaymentHash)
+}
+
+// Catches: reporting a failure as sent.
+func TestOnSettledSkipsFailedPayment(t *testing.T) {
+	e := newEnv(t)
+	log := &settledLog{}
+	e.ledger.OnSettled(log.add)
+	e.start()
+	e.node.ScriptPay(fake.PayFail)
+	if tx := e.pay(e.node.OutsideInvoice(1_000 * sat)); tx.State != StateFailed {
+		t.Fatalf("got %+v", tx)
+	}
+	if rows := log.list(); len(rows) != 0 {
+		t.Fatalf("got %+v", rows)
+	}
+}
+
+// Catches: the callback running inside a database transaction. Only one writer can
+// exist, so anything it writes would wait for itself.
+func TestOnSettledRunsAfterCommit(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	var failures atomic.Int64
+	var calls atomic.Int64
+	e.ledger.OnSettled(func(Transaction) {
+		write, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		if _, err := e.store.DB.ExecContext(write, `INSERT INTO settings (key, value) VALUES ('probe', '1')
+			ON CONFLICT (key) DO NOTHING`); err != nil {
+			failures.Add(1)
+		}
+		calls.Add(1)
+	})
+	e.start()
+	own, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, AmountMsat: 1_000 * sat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.pay(own.Invoice)
+	income, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, AmountMsat: 1_000 * sat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.node.Settle(income.PaymentHash); err != nil {
+		t.Fatal(err)
+	}
+	e.pay(e.node.OutsideInvoice(1_000 * sat))
+	e.waitUntil("each row is reported", func() bool { return calls.Load() == 4 })
+	if failures.Load() != 0 {
+		t.Fatalf("%d writes failed inside the callback", failures.Load())
+	}
+}
+
+// Catches: a start that gives up while the node boots, and one that keeps retrying a
+// swapped node or ignores a stop signal.
+func TestStartRetrying(t *testing.T) {
+	t.Run("NodeComesUp", func(t *testing.T) {
+		e := newEnv(t)
+		e.node.SetUnreachable(true)
+		done := make(chan error, 1)
+		go func() { done <- e.ledger.StartRetrying(context.Background()) }()
+		select {
+		case err := <-done:
+			t.Fatalf("returned with the node down: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+		e.node.SetUnreachable(false)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		e.ledger.Close()
+	})
+	t.Run("SwappedNode", func(t *testing.T) {
+		e := newEnv(t)
+		if _, err := e.store.DB.Exec(`INSERT INTO settings (key, value) VALUES ('node_pubkey', '03other')`); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.ledger.StartRetrying(context.Background()); !errors.Is(err, ErrNodeChanged) {
+			t.Fatalf("got %v", err)
+		}
+	})
+	t.Run("Stopped", func(t *testing.T) {
+		e := newEnv(t)
+		e.node.SetUnreachable(true)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := e.ledger.StartRetrying(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v", err)
+		}
+	})
+}
+
+// Catches: an off-by-one at either end of a time window, and rows of equal time in
+// no fixed order, which would repeat or lose rows between pages.
+func TestHistoryWindow(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	e.start()
+	first := e.now.Load()
+	var hashes []string
+	for range 4 {
+		row, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, AmountMsat: sat})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hashes = append(hashes, row.PaymentHash)
+		e.advance(10 * time.Second)
+	}
+	rows, total, err := e.ledger.History(ctx, HistoryQuery{
+		AccountID: e.acct, From: first + 10, Until: first + 20, Unpaid: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || len(rows) != 2 || rows[0].PaymentHash != hashes[2] || rows[1].PaymentHash != hashes[1] {
+		t.Fatalf("total %d, rows %+v", total, rows)
+	}
 }

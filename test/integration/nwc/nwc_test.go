@@ -29,13 +29,18 @@ const (
 	silence = 3 * time.Second
 )
 
-// service is a running nwc4ln.
+// service is one nwc4ln data folder, and the process on it while it runs.
 type service struct {
-	dir              string
+	t                *testing.T
+	dir, binary      string
+	config           string
 	connectionString string
+	second           string // A second app's connection string.
+	cmd              *exec.Cmd
+	log              *os.File
 }
 
-// startService builds nwc4ln, adds one app and starts it. It stops by PID in a
+// startService builds nwc4ln, adds two apps and starts it. It stops by PID in a
 // cleanup, so a failed test leaves no process behind.
 func startService(t *testing.T, n *integration.Network) *service {
 	t.Helper()
@@ -68,23 +73,20 @@ func startService(t *testing.T, n *integration.Network) *service {
 	if err := config.Write(path, cfg); err != nil {
 		t.Fatal(err)
 	}
-	add := exec.CommandContext(ctx, binary, "app", "add", "--name", "test", "--config", path)
-	stdout, err := add.Output()
-	if err != nil {
-		t.Fatalf("app add: %v", err)
-	}
+	s := &service{t: t, dir: dir, binary: binary, config: path}
+	s.connectionString = s.addApp("first")
+	s.second = s.addApp("second")
 	logFile, err := os.Create(filepath.Join(filepath.Dir(dir), "nwc4ln.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(binary, "start", "--config", path)
-	cmd.Stdout, cmd.Stderr = logFile, logFile
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
+	s.log = logFile
+	s.start()
 	t.Cleanup(func() {
-		_ = cmd.Process.Signal(os.Interrupt)
-		_ = cmd.Wait()
+		if s.cmd != nil {
+			_ = s.cmd.Process.Signal(os.Interrupt)
+			_ = s.cmd.Wait()
+		}
 		_ = logFile.Close()
 		if t.Failed() {
 			if log, err := os.ReadFile(logFile.Name()); err == nil {
@@ -92,7 +94,38 @@ func startService(t *testing.T, n *integration.Network) *service {
 			}
 		}
 	})
-	return &service{dir: dir, connectionString: strings.TrimSpace(string(stdout))}
+	return s
+}
+
+func (s *service) addApp(name string) string {
+	s.t.Helper()
+	add := exec.CommandContext(s.t.Context(), s.binary, "app", "add", "--name", name, "--invoice", "--config", s.config)
+	stdout, err := add.Output()
+	if err != nil {
+		s.t.Fatalf("app add: %v", err)
+	}
+	return strings.TrimSpace(string(stdout))
+}
+
+func (s *service) start() {
+	s.t.Helper()
+	cmd := exec.Command(s.binary, "start", "--config", s.config)
+	cmd.Stdout, cmd.Stderr = s.log, s.log
+	if err := cmd.Start(); err != nil {
+		s.t.Fatal(err)
+	}
+	s.cmd = cmd
+}
+
+// kill stops the process the hard way, by its own PID, so that no shutdown code
+// runs. The kernel frees the data folder lock.
+func (s *service) kill() {
+	s.t.Helper()
+	if err := s.cmd.Process.Kill(); err != nil {
+		s.t.Fatal(err)
+	}
+	_ = s.cmd.Wait()
+	s.cmd = nil
 }
 
 // waitForInfo connects a client and waits until the service has published.
@@ -141,7 +174,7 @@ func TestNWC(t *testing.T) {
 
 	t.Run("InfoEvent", func(t *testing.T) {
 		info := waitForInfo(t, client)
-		if !slices.Equal(info.Methods, []string{"get_info"}) || info.Encryption != "nip44_v2 nip04" {
+		if !slices.Contains(info.Methods, "pay_invoice") || info.Encryption != "nip44_v2 nip04" {
 			t.Fatalf("got %+v", info)
 		}
 	})

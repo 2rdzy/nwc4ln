@@ -19,4 +19,6 @@ Needs Linux `amd64`, `git` and Go. Versions are pinned in [versions.env](version
   a channel shown as active can still refuse a payment for a moment.
 - **Folders.** Data is in `NWC4LN_IT_DIR` (default `$TMPDIR/nwc4ln/it`), binaries in `NWC4LN_IT_CACHE` (default
   `~/.cache/nwc4ln-it`). `down` removes only a folder that `up` created.
+- **Acceptance.** `nwc/acceptance_test.go` runs `@getalby/sdk`, pinned in `nwc/acceptance/package-lock.json`, against a
+  real nwc4ln. It needs Node.js and is used only here. `regtest lncli <node> <args>` lets the script act as `lnd-b`.
 - **Ports** start at 19500. `up` refuses to start if one is taken.

@@ -87,9 +87,20 @@ func (c *Client) Seal(content string, createdAt nostr.Timestamp, tags ...nostr.T
 	return event, event.Sign(c.Secret)
 }
 
-// Request builds a signed request.
+// Request builds a signed request with no params.
 func (c *Client) Request(scheme, method string, createdAt nostr.Timestamp, tags ...nostr.Tag) (*nostr.Event, error) {
-	content, err := c.Encrypt(scheme, fmt.Sprintf(`{"method":%q,"params":{}}`, method))
+	return c.RequestWith(scheme, method, struct{}{}, createdAt, tags...)
+}
+
+// RequestWith builds a signed request.
+func (c *Client) RequestWith(
+	scheme, method string, params any, createdAt nostr.Timestamp, tags ...nostr.Tag,
+) (*nostr.Event, error) {
+	body, err := json.Marshal(map[string]any{"method": method, "params": params})
+	if err != nil {
+		return nil, err
+	}
+	content, err := c.Encrypt(scheme, string(body))
 	if err != nil {
 		return nil, err
 	}
@@ -126,21 +137,7 @@ func (c *Client) Open(scheme string, request, reply *nostr.Event) (*Response, er
 	if !hasTag(reply, "p", c.Public) || !hasTag(reply, "e", request.ID) {
 		return nil, fmt.Errorf("reply is not tagged for this request: %v", reply.Tags)
 	}
-	var plain string
-	var err error
-	if scheme == NIP44 {
-		var key [32]byte
-		if key, err = nip44.GenerateConversationKey(c.ServicePub, c.Secret); err != nil {
-			return nil, err
-		}
-		plain, err = nip44.Decrypt(reply.Content, key)
-	} else {
-		var key []byte
-		if key, err = nip04.ComputeSharedSecret(c.ServicePub, c.Secret); err != nil {
-			return nil, err
-		}
-		plain, err = nip04.Decrypt(reply.Content, key)
-	}
+	plain, err := c.Decrypt(scheme, reply.Content)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt reply: %w", err)
 	}
@@ -149,6 +146,22 @@ func (c *Client) Open(scheme string, request, reply *nostr.Event) (*Response, er
 		return nil, fmt.Errorf("read reply %q: %w", plain, err)
 	}
 	return &response, nil
+}
+
+// Decrypt decrypts from the service key. Any scheme but NIP-44 is NIP-04.
+func (c *Client) Decrypt(scheme, content string) (string, error) {
+	if scheme == NIP44 {
+		key, err := nip44.GenerateConversationKey(c.ServicePub, c.Secret)
+		if err != nil {
+			return "", err
+		}
+		return nip44.Decrypt(content, key)
+	}
+	key, err := nip04.ComputeSharedSecret(c.ServicePub, c.Secret)
+	if err != nil {
+		return "", err
+	}
+	return nip04.Decrypt(content, key)
 }
 
 func hasTag(event *nostr.Event, name, value string) bool {
@@ -208,9 +221,14 @@ func (c *Client) ReadInfo(ctx context.Context) (*Info, error) {
 	return info, nil
 }
 
-// Call sends a request and waits for the reply until ctx ends.
+// Call sends a request with no params and waits for the reply until ctx ends.
 func (c *Client) Call(ctx context.Context, scheme, method string) (*Response, error) {
-	request, err := c.Request(scheme, method, nostr.Now())
+	return c.CallWith(ctx, scheme, method, struct{}{})
+}
+
+// CallWith sends a request and waits for the reply until ctx ends.
+func (c *Client) CallWith(ctx context.Context, scheme, method string, params any) (*Response, error) {
+	request, err := c.RequestWith(scheme, method, params, nostr.Now())
 	if err != nil {
 		return nil, err
 	}

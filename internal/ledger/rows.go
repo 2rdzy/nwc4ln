@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/2rdzy/nwc4ln/internal/node"
@@ -137,9 +138,83 @@ func (l *Ledger) transaction(ctx context.Context, id int64) (Transaction, error)
 	return scanRow(row.Scan)
 }
 
-// History returns an account's transactions, newest first.
-func (l *Ledger) History(ctx context.Context, accountID int64) ([]Transaction, error) {
-	return listRows(ctx, l.db, "account_id = ? ORDER BY created_at DESC, id DESC", accountID)
+// HistoryQuery chooses transactions of one account.
+type HistoryQuery struct {
+	AccountID int64
+	// From and Until are Unix seconds, both inclusive, on created_at. Until 0
+	// means no end.
+	From, Until int64
+	// Limit 0 means no limit.
+	Limit, Offset int64
+	// Unpaid includes rows that are not settled.
+	Unpaid bool
+	// Type is TypeIncoming, TypeOutgoing, or empty for both.
+	Type string
+}
+
+// History returns one page of an account's transactions, newest first, and how
+// many match without the paging.
+func (l *Ledger) History(ctx context.Context, query HistoryQuery) ([]Transaction, int64, error) {
+	where := "account_id = ? AND created_at >= ?"
+	args := []any{query.AccountID, query.From}
+	if query.Until != 0 {
+		where += " AND created_at <= ?"
+		args = append(args, query.Until)
+	}
+	if !query.Unpaid {
+		where += " AND state = 'settled'"
+	}
+	if query.Type != "" {
+		where += " AND type = ?"
+		args = append(args, query.Type)
+	}
+	var total int64
+	err := l.db.QueryRowContext(ctx, "SELECT count(*) FROM transactions WHERE "+where, args...).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+	page := where + " ORDER BY created_at DESC, id DESC"
+	if query.Limit != 0 {
+		page += " LIMIT ? OFFSET ?"
+		args = append(args, query.Limit, query.Offset)
+	}
+	rows, err := listRows(ctx, l.db, page, args...)
+	return rows, total, err
+}
+
+// Lookup finds an account's transaction by payment hash, or by invoice text if
+// the hash is empty. Two rows can match, after a retry or when an account pays its
+// own invoice: the outgoing row comes first, then the newest. It needs no node.
+func (l *Ledger) Lookup(ctx context.Context, accountID int64, hash, invoice string) (Transaction, error) {
+	column, value := "payment_hash", strings.ToLower(hash)
+	if hash == "" {
+		column, value = "invoice", strings.ToLower(invoice)
+	}
+	rows, err := listRows(ctx, l.db, "account_id = ? AND "+column+" = ? ORDER BY type = 'outgoing' DESC, id DESC LIMIT 1",
+		accountID, value)
+	if err != nil {
+		return Transaction{}, err
+	}
+	if len(rows) == 0 {
+		return Transaction{}, ErrNotFound
+	}
+	return rows[0], nil
+}
+
+// MainAvailable is what the node can send now, less every hold. It can be below
+// 0. It fails if the node cannot be asked, so nobody is shown a guess.
+func (l *Ledger) MainAvailable(ctx context.Context) (int64, error) {
+	spendable, err := l.node.Spendable(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("read spendable: %w", err)
+	}
+	var holds int64
+	err = l.db.QueryRowContext(ctx, `SELECT coalesce(sum(amount_msat + reserve_msat), 0) FROM transactions
+		WHERE type = 'outgoing' AND state = 'pending'`).Scan(&holds)
+	if err != nil {
+		return 0, err
+	}
+	return spendable.ActiveMsat - holds, nil
 }
 
 func changedOne(result sql.Result, err error) (bool, error) {

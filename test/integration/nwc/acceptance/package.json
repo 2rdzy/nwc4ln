@@ -1,0 +1,9 @@
+{
+  "name": "nwc4ln-acceptance",
+  "private": true,
+  "description": "An outside NWC client against a real nwc4ln. Used only in tests, and never shipped.",
+  "type": "module",
+  "dependencies": {
+    "@getalby/sdk": "9.0.0"
+  }
+}
