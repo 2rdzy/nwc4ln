@@ -2,12 +2,14 @@ package nwc
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
 
 	"github.com/getAlby/go-nostr"
 
+	"github.com/2rdzy/nwc4ln/internal/ledger"
 	"github.com/2rdzy/nwc4ln/internal/store"
 )
 
@@ -27,12 +29,24 @@ func CheckRelay(relay string) error {
 	return nil
 }
 
-// AddApp creates an app with no limit and one connection, and returns its
-// connection string. That string is the only copy of the client secret: only the
-// public key is stored, so this is the one time it can be shown.
-func AddApp(ctx context.Context, db *store.Store, name, relay string, canInvoice bool) (connectionString string, err error) {
+// AddApp creates an app with one connection, and returns its connection string.
+// That string is the only copy of the client secret: only the public key is stored,
+// so this is the one time it can be shown. A running service must use its own
+// AddApp, so that it starts listening for the new connection.
+func AddApp(
+	ctx context.Context, db *store.Store, name, relay string, settings ledger.AppSettings,
+) (connectionString string, err error) {
+	return addApp(ctx, db.DB, name, relay, settings)
+}
+
+func addApp(
+	ctx context.Context, db *sql.DB, name, relay string, settings ledger.AppSettings,
+) (connectionString string, err error) {
 	if name == "" {
 		return "", errors.New("app name is required")
+	}
+	if err := settings.Check(); err != nil {
+		return "", err
 	}
 	if err := CheckRelay(relay); err != nil {
 		return "", err
@@ -45,14 +59,16 @@ func AddApp(ctx context.Context, db *store.Store, name, relay string, canInvoice
 	if err != nil {
 		return "", err
 	}
-	tx, err := db.DB.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = tx.Rollback() }() // Does nothing after a commit.
 	now := nostr.Now()
-	result, err := tx.ExecContext(ctx, `INSERT INTO accounts (type, name, can_pay, can_invoice, created_at)
-		VALUES ('app', ?, 1, ?, ?)`, name, canInvoice, int64(now))
+	result, err := tx.ExecContext(ctx, `INSERT INTO accounts
+		(type, name, limit_msat, renewal, expires_at, can_pay, can_invoice, created_at)
+		VALUES ('app', ?, ?, ?, ?, ?, ?, ?)`, name, settings.LimitColumn(), settings.Renewal, settings.ExpiryColumn(),
+		settings.CanPay, settings.CanInvoice, int64(now))
 	if err != nil {
 		return "", fmt.Errorf("add app: %w", err)
 	}

@@ -47,6 +47,10 @@ const (
 	// not be the last word. The second case covers a fast restart.
 	noRecordGrace = 2 * time.Minute
 
+	// nodeReadTimeout bounds the node read made under holdLock, because every app
+	// payment and every settlement waits for that lock.
+	nodeReadTimeout = 5 * time.Second
+
 	sweepEvery   = 5 * time.Second
 	retryEvery   = 5 * time.Second
 	catchUpEvery = 10 * time.Minute
@@ -57,8 +61,16 @@ var (
 	ErrNotRunning     = errors.New("ledger is not running")
 	ErrUnknownAccount = errors.New("unknown account")
 	ErrAccountDeleted = errors.New("account is deleted")
-	ErrBadAmount      = errors.New("bad amount")
-	ErrInvoiceExpired = errors.New("invoice has expired")
+	ErrAccountExpired = errors.New("account has expired")
+	// ErrRestricted means the account's settings do not allow this.
+	ErrRestricted = errors.New("not allowed for this account")
+	// ErrQuotaExceeded means amount plus reserve does not fit in the remaining limit.
+	ErrQuotaExceeded = errors.New("over the spending limit")
+	// ErrInsufficientBalance means amount plus reserve does not fit in the money available.
+	ErrInsufficientBalance = errors.New("not enough funds")
+	ErrBadAmount           = errors.New("bad amount")
+	ErrBadRenewal          = errors.New("bad renewal period")
+	ErrInvoiceExpired      = errors.New("invoice has expired")
 	// ErrNotFound means the account has no transaction that matches.
 	ErrNotFound = errors.New("transaction not found")
 	// ErrAlreadyPaid means a pending or settled payment exists for the hash.
@@ -96,12 +108,18 @@ type Ledger struct {
 	retryEvery   time.Duration
 	catchUpEvery time.Duration
 	beforePay    func() // Runs after the hold is stored, before the node call.
+	// afterNodeRead runs between the node read and the checks that use its figure.
+	afterNodeRead func()
 
 	// settledHook is set before Start, and read without a lock after that.
 	settledHook func(Transaction)
 
-	// holdLock covers the check and the insert of a payment, so that two payments
-	// at once cannot both pass. Payments to the node run outside it.
+	// holdLock covers the node read, the check and the insert of a payment, so that
+	// two payments at once cannot both pass. Writes that settle a payment or credit
+	// income take it too, so that the node figure cannot go stale before the check:
+	// a settled payment drops its hold, and a figure read before that would count the
+	// money twice. Payments to the node run outside it. It is not reentrant, so only
+	// the innermost write takes it, and it comes before any database transaction.
 	holdLock sync.Mutex
 
 	mu       sync.Mutex
@@ -294,20 +312,4 @@ func (l *Ledger) isLive(hash string) bool {
 		}
 	}
 	return false
-}
-
-// checkAccount decides whether an account may use the ledger. Limits and
-// balances will be added here.
-func checkAccount(ctx context.Context, tx *sql.Tx, accountID int64) error {
-	var deletedAt sql.NullInt64
-	err := tx.QueryRowContext(ctx, "SELECT deleted_at FROM accounts WHERE id = ?", accountID).Scan(&deletedAt)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return ErrUnknownAccount
-	case err != nil:
-		return err
-	case deletedAt.Valid:
-		return ErrAccountDeleted
-	}
-	return nil
 }

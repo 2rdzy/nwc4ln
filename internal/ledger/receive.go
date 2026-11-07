@@ -29,8 +29,12 @@ func (l *Ledger) MakeInvoice(ctx context.Context, request InvoiceRequest) (Trans
 	if request.AmountMsat <= 0 || request.AmountMsat > MaxAmountMsat {
 		return Transaction{}, fmt.Errorf("%w: %d", ErrBadAmount, request.AmountMsat)
 	}
-	if err := l.accountUsable(ctx, request.AccountID); err != nil {
+	settings, err := l.checkAccount(ctx, l.db, request.AccountID)
+	if err != nil {
 		return Transaction{}, err
+	}
+	if !settings.CanInvoice {
+		return Transaction{}, ErrRestricted
 	}
 	invoice, err := l.node.MakeInvoice(ctx, node.InvoiceRequest{
 		AmountMsat: request.AmountMsat, Description: request.Description,
@@ -48,15 +52,6 @@ func (l *Ledger) MakeInvoice(ctx context.Context, request InvoiceRequest) (Trans
 		return Transaction{}, fmt.Errorf("store invoice: %w", err)
 	}
 	return row, nil
-}
-
-func (l *Ledger) accountUsable(ctx context.Context, accountID int64) error {
-	tx, err := l.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	return checkAccount(ctx, tx, accountID)
 }
 
 // catchUp asks the node about every pending invoice. It works the same at any
@@ -156,9 +151,23 @@ func (l *Ledger) onSettled(ctx context.Context, invoice node.Invoice) error {
 // sent twice credits once. An invoice with no row was not made here, and counts
 // as main wallet by itself.
 func (l *Ledger) credit(ctx context.Context, invoice node.Invoice, storeIndex bool) error {
-	tx, err := l.db.BeginTx(ctx, nil)
+	l.holdLock.Lock()
+	credited, err := l.storeCredit(ctx, invoice, storeIndex)
+	l.holdLock.Unlock()
 	if err != nil {
 		return err
+	}
+	if credited {
+		l.settledInvoice(ctx, invoice.Hash)
+	}
+	return nil
+}
+
+// storeCredit is the database part of credit. It reports whether a row changed.
+func (l *Ledger) storeCredit(ctx context.Context, invoice node.Invoice, storeIndex bool) (bool, error) {
+	tx, err := l.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
 	}
 	defer func() { _ = tx.Rollback() }() // Does nothing after a commit.
 	settledAt := invoice.SettledAt
@@ -167,7 +176,7 @@ func (l *Ledger) credit(ctx context.Context, invoice node.Invoice, storeIndex bo
 	}
 	credited, err := settleIncoming(ctx, tx, invoice, settledAt)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !credited {
 		// Settled inside the ledger or failed, and yet paid at the node. The money
@@ -177,7 +186,7 @@ func (l *Ledger) credit(ctx context.Context, invoice node.Invoice, storeIndex bo
 			WHERE payment_hash = ? AND type = 'incoming' AND (internal = 1 OR state = 'failed')`,
 			invoice.Hash).Scan(&count)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if count > 0 {
 			l.log.Warn("outside payment on a closed invoice, left in the main wallet", "hash", invoice.Hash)
@@ -185,14 +194,8 @@ func (l *Ledger) credit(ctx context.Context, invoice node.Invoice, storeIndex bo
 	}
 	if storeIndex {
 		if err := storeSettleIndex(ctx, tx, invoice.SettleIndex); err != nil {
-			return err
+			return false, err
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	if credited {
-		l.settledInvoice(ctx, invoice.Hash)
-	}
-	return nil
+	return credited, tx.Commit()
 }

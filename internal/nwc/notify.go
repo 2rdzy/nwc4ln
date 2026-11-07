@@ -42,13 +42,16 @@ func (s *Service) notify(ctx context.Context, row ledger.Transaction) {
 		kind = "payment_sent"
 	}
 	payload := notification{Type: kind, Notification: s.present(row)}
-	for _, c := range s.connections {
+	for _, c := range s.connectionList() {
 		if c.accountID != row.AccountID {
 			continue
 		}
 		revoked, err := s.isRevoked(ctx, c.id)
 		if err != nil || revoked {
 			continue
+		}
+		if _, err := s.ledger.Access(ctx, c.accountID); err != nil {
+			continue // Expired or deleted: the connection has stopped working.
 		}
 		s.publishNotification(ctx, c, payload, schemeNIP44, kindNotification)
 		s.publishNotification(ctx, c, payload, schemeNIP04, kindNotificationNIP04)

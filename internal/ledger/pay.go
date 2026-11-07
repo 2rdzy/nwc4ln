@@ -99,14 +99,27 @@ func (l *Ledger) hold(
 ) (Transaction, error) {
 	l.holdLock.Lock()
 	defer l.holdLock.Unlock()
+	read, cancel := context.WithTimeout(ctx, nodeReadTimeout)
+	spendable, err := l.node.Spendable(read)
+	cancel()
+	if err != nil {
+		return Transaction{}, fmt.Errorf("read spendable: %w", err)
+	}
+	if l.afterNodeRead != nil {
+		l.afterNodeRead()
+	}
 	tx, err := l.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Transaction{}, err
 	}
 	defer func() { _ = tx.Rollback() }() // Does nothing after a commit.
 
-	if err := checkAccount(ctx, tx, request.AccountID); err != nil {
+	settings, err := l.checkAccount(ctx, tx, request.AccountID)
+	if err != nil {
 		return Transaction{}, err
+	}
+	if !settings.CanPay {
+		return Transaction{}, ErrRestricted
 	}
 	var taken int
 	err = tx.QueryRowContext(ctx, `SELECT count(*) FROM transactions
@@ -127,6 +140,9 @@ func (l *Ledger) hold(
 			return Transaction{}, ErrOwnInvoice
 		}
 		reserve = Reserve(amount)
+	}
+	if err := l.checkFunds(ctx, tx, request.AccountID, settings, spendable.ActiveMsat, amount+reserve); err != nil {
+		return Transaction{}, err
 	}
 	row := Transaction{
 		AccountID: request.AccountID, RequestID: request.RequestID, Type: TypeOutgoing, State: StatePending,
@@ -270,7 +286,9 @@ func (l *Ledger) applySuccess(ctx context.Context, row Transaction, payment node
 	if payment.FeeMsat > row.ReserveMsat {
 		l.log.Error("fee above the reserve", "hash", row.PaymentHash, "fee", payment.FeeMsat, "reserve", row.ReserveMsat)
 	}
+	l.holdLock.Lock()
 	moved, err := settleOutgoing(ctx, l.db, row.ID, amount, payment.FeeMsat, payment.Preimage, l.now())
+	l.holdLock.Unlock()
 	if err != nil {
 		return err
 	}
@@ -325,7 +343,10 @@ func (l *Ledger) settleInternal(ctx context.Context, row Transaction) {
 	}
 	// If this fails, or the process stops, neither side changed: the row stays
 	// pending, the node has no record of it, and it fails on the next check.
-	if err := settleBothSides(ctx, l.db, row, l.now()); err != nil {
+	l.holdLock.Lock()
+	err := settleBothSides(ctx, l.db, row, l.now())
+	l.holdLock.Unlock()
+	if err != nil {
 		l.log.Error("settle internal payment", "hash", row.PaymentHash, "error", err)
 		return
 	}

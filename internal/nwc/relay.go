@@ -14,12 +14,15 @@ import (
 // running. The relay going away is normal, so it never returns an error for that.
 func (s *Service) Run(ctx context.Context) {
 	defer s.work.Wait()
-	if len(s.connections) == 0 {
-		s.log.Warn("no connections to serve; one added later is picked up at the next start")
-		<-ctx.Done()
-		return
-	}
 	s.work.Go(func() { s.notifyLoop(ctx) })
+	if len(s.connectionList()) == 0 {
+		s.log.Warn("no connections to serve yet")
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.changed:
+		}
+	}
 	backoff := backoffFirst
 	for ctx.Err() == nil {
 		began := time.Now()
@@ -60,10 +63,10 @@ func (s *Service) serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer subscription.Unsub()
+	defer func() { subscription.Unsub() }() // The one in use at the end.
 	s.setRelay(relay)
 	s.publishInfo(ctx)
-	s.log.Info("listening on relay", "relay", s.relay, "connections", len(s.connections))
+	s.log.Info("listening on relay", "relay", s.relay, "connections", len(s.connectionList()))
 	for {
 		select {
 		case <-ctx.Done():
@@ -72,6 +75,16 @@ func (s *Service) serve(ctx context.Context) error {
 			return context.Cause(relay.Context())
 		case reason := <-subscription.ClosedReason:
 			return fmt.Errorf("relay closed the subscription: %s", reason)
+		case <-s.changed:
+			// The new one opens first, so that no request falls between the two. A
+			// request that reaches both is dropped as a repeat.
+			next, err := relay.Subscribe(ctx, nostr.Filters{s.filter(since)})
+			if err != nil {
+				return err
+			}
+			subscription.Unsub()
+			subscription = next
+			s.publishInfo(ctx)
 		case event, open := <-subscription.Events:
 			if !open {
 				return errors.New("subscription ended")
@@ -85,9 +98,10 @@ func (s *Service) serve(ctx context.Context) error {
 // relays limit subscriptions per connection. It does not name client keys: a
 // revoked client must still reach the service to get UNAUTHORIZED.
 func (s *Service) filter(since nostr.Timestamp) nostr.Filter {
-	keys := make([]string, 0, len(s.connections))
-	for key := range s.connections {
-		keys = append(keys, key)
+	list := s.connectionList()
+	keys := make([]string, 0, len(list))
+	for _, c := range list {
+		keys = append(keys, c.servicePub)
 	}
 	return nostr.Filter{Kinds: []int{kindRequest}, Tags: nostr.TagMap{"p": keys}, Since: &since}
 }
@@ -152,7 +166,7 @@ func (s *Service) setRelay(relay *nostr.Relay) {
 // them, so this runs on every connect. A failure is only logged: requests can
 // still be served without it.
 func (s *Service) publishInfo(ctx context.Context) {
-	for _, c := range s.connections {
+	for _, c := range s.connectionList() {
 		if c.revoked {
 			continue
 		}
@@ -166,12 +180,15 @@ func (s *Service) publishInfo(ctx context.Context) {
 	}
 }
 
-// infoEvent lists only what works today, because a client will call whatever it
-// finds here.
+// infoEvent lists only what this connection may call, because a client will call
+// whatever it finds here. A relay keeps one info event per key, and of two with the
+// same time it may keep either, so each is stamped later than the last.
 func (s *Service) infoEvent(c connection) (*nostr.Event, error) {
+	created := max(s.now().Unix(), s.lastInfo[c.id]+1)
+	s.lastInfo[c.id] = created
 	event := nostr.Event{
-		Kind: kindInfo, CreatedAt: nostr.Timestamp(s.now().Unix()),
-		Content: strings.Join(s.methodNames(), " "),
+		Kind: kindInfo, CreatedAt: nostr.Timestamp(created),
+		Content: strings.Join(s.methodNames(c.canPay, c.canInvoice), " "),
 		Tags: nostr.Tags{
 			{"encryption", encryptionTag},
 			{"notifications", strings.Join(notificationTypes, " ")},

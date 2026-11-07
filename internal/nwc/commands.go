@@ -23,7 +23,7 @@ const (
 // What this service offers beyond the core commands, for clients to read.
 var (
 	notificationTypes = []string{"payment_received", "payment_sent"}
-	extensions        = []string{"02", "05"}
+	extensions        = []string{"02", "05", "13"}
 )
 
 // errPaymentPending is a payment with no final state yet. It may still settle, so
@@ -91,7 +91,7 @@ type getInfoResult struct {
 	Notifications []string `json:"notifications"`
 }
 
-func (s *Service) getInfo(ctx context.Context, _ *accepted, _ json.RawMessage) (any, *Error) {
+func (s *Service) getInfo(ctx context.Context, a *accepted, _ json.RawMessage) (any, *Error) {
 	info, err := s.node.Info(ctx)
 	if err != nil {
 		s.log.Error("get_info: node call failed", "error", err)
@@ -99,7 +99,7 @@ func (s *Service) getInfo(ctx context.Context, _ *accepted, _ json.RawMessage) (
 	}
 	return getInfoResult{
 		Alias: info.Alias, Color: info.Color, PubKey: info.PubKey, Network: info.Network,
-		BlockHeight: info.BlockHeight, BlockHash: info.BlockHash, Methods: s.methodNames(),
+		BlockHeight: info.BlockHeight, BlockHash: info.BlockHash, Methods: s.methodNames(a.settings.CanPay, a.settings.CanInvoice),
 		Extensions: extensions, Notifications: notificationTypes,
 	}, nil
 }
@@ -108,13 +108,38 @@ type balanceResult struct {
 	Balance int64 `json:"balance"`
 }
 
-func (s *Service) getBalance(ctx context.Context, _ *accepted, _ json.RawMessage) (any, *Error) {
-	available, err := s.ledger.MainAvailable(ctx)
+func (s *Service) getBalance(ctx context.Context, a *accepted, _ json.RawMessage) (any, *Error) {
+	balance, err := s.ledger.AppBalance(ctx, a.connection.accountID)
 	if err != nil {
 		s.log.Error("get_balance failed", "error", err)
 		return nil, &Error{Code: codeInternal, Message: "the balance cannot be read"}
 	}
-	return balanceResult{Balance: max(available, 0)}, nil
+	return balanceResult{Balance: max(balance, 0)}, nil
+}
+
+// budgetResult is NWC-13. used_budget can pass total_budget after a limit is cut.
+type budgetResult struct {
+	UsedBudget    int64  `json:"used_budget"`
+	TotalBudget   int64  `json:"total_budget"`
+	RenewsAt      int64  `json:"renews_at,omitempty"`
+	RenewalPeriod string `json:"renewal_period"`
+}
+
+// getBudget answers with an empty object if there is no limit. A limit of 0 is a
+// limit, and clients must be able to tell the two apart.
+func (s *Service) getBudget(ctx context.Context, a *accepted, _ json.RawMessage) (any, *Error) {
+	budget, err := s.ledger.AppBudget(ctx, a.connection.accountID)
+	if err != nil {
+		return nil, s.refused("get_budget", err)
+	}
+	if budget == nil {
+		return struct{}{}, nil
+	}
+	result := budgetResult{UsedBudget: budget.UsedMsat, TotalBudget: budget.TotalMsat, RenewalPeriod: budget.Renewal}
+	if !budget.RenewsAt.IsZero() {
+		result.RenewsAt = budget.RenewsAt.Unix()
+	}
+	return result, nil
 }
 
 type payParams struct {
@@ -161,6 +186,14 @@ func (s *Service) refused(command string, err error) *Error {
 	switch {
 	case errors.Is(err, ledger.ErrAccountDeleted):
 		return &Error{Code: codeUnauthorized, Message: "this account is deleted"}
+	case errors.Is(err, ledger.ErrAccountExpired):
+		return &Error{Code: codeUnauthorized, Message: "this app has expired"}
+	case errors.Is(err, ledger.ErrRestricted):
+		return &Error{Code: codeRestricted, Message: "this app may not do that"}
+	case errors.Is(err, ledger.ErrQuotaExceeded):
+		return &Error{Code: codeQuotaExceeded, Message: "over the spending limit"}
+	case errors.Is(err, ledger.ErrInsufficientBalance):
+		return &Error{Code: codeInsufficientBalance, Message: "not enough funds, including the fee reserve"}
 	case errors.Is(err, ledger.ErrAlreadyPaid):
 		message = "this invoice is already paid or being paid"
 	case errors.Is(err, ledger.ErrInvoiceClosed):

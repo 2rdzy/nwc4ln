@@ -29,8 +29,11 @@ import (
 
 const relayURL = "ws://127.0.0.1:1"
 
+// testFunds is more than any test spends, unless it sets its own figure.
+const testFunds = 1_000_000_000 * sat
+
 var allMethods = []string{
-	"get_balance", "get_info", "list_transactions", "lookup_invoice", "make_invoice", "pay_invoice",
+	"get_balance", "get_budget", "get_info", "list_transactions", "lookup_invoice", "make_invoice", "pay_invoice",
 }
 
 type env struct {
@@ -53,6 +56,7 @@ func newEnv(t *testing.T) *env {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	e := &env{t: t, store: db, path: path, node: fake.New(), now: &atomic.Int64{}}
+	e.node.SetSpendable(node.Spendable{ActiveMsat: testFunds, AllMsat: testFunds})
 	e.now.Store(time.Now().Unix())
 	e.client = e.addApp("first")
 	t.Cleanup(func() { e.ledger.Close() })
@@ -62,7 +66,9 @@ func newEnv(t *testing.T) *env {
 
 func (e *env) addApp(name string) *nwctest.Client {
 	e.t.Helper()
-	connectionString, err := AddApp(e.t.Context(), e.store, name, relayURL, false)
+	settings := ledger.DefaultApp()
+	settings.CanInvoice = true
+	connectionString, err := AddApp(e.t.Context(), e.store, name, relayURL, settings)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -430,7 +436,7 @@ func TestGetInfo(t *testing.T) {
 		got.BlockHeight != want.BlockHeight || got.BlockHash != want.BlockHash || got.Color != want.Color {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
-	if !slices.Equal(got.Methods, allMethods) || !slices.Equal(got.Extensions, []string{"02", "05"}) ||
+	if !slices.Equal(got.Methods, allMethods) || !slices.Equal(got.Extensions, []string{"02", "05", "13"}) ||
 		!slices.Equal(got.Notes, []string{"payment_received", "payment_sent"}) {
 		t.Errorf("got %+v", got)
 	}
@@ -456,7 +462,7 @@ func TestInfoEvent(t *testing.T) {
 	if got, _ := tagValue(event, "encryption"); got != "nip44_v2 nip04" {
 		t.Fatalf("encryption %q", got)
 	}
-	if got, _ := tagValue(event, "extensions"); got != "02 05" {
+	if got, _ := tagValue(event, "extensions"); got != "02 05 13" {
 		t.Fatalf("extensions %q", got)
 	}
 	if got, _ := tagValue(event, "notifications"); got != "payment_received payment_sent" {
@@ -498,7 +504,7 @@ func TestClientSecretNotStored(t *testing.T) {
 // Catches: an app with rights nobody gave it.
 func TestAddAppPermissions(t *testing.T) {
 	e := newEnv(t)
-	if _, err := AddApp(t.Context(), e.store, "second", relayURL, true); err != nil {
+	if _, err := AddApp(t.Context(), e.store, "second", relayURL, ledger.DefaultApp()); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := e.store.DB.Query(`SELECT can_pay, can_invoice, limit_msat FROM accounts ORDER BY id`)
@@ -518,7 +524,7 @@ func TestAddAppPermissions(t *testing.T) {
 		}
 		got = append(got, [2]bool{pay, invoice})
 	}
-	if !slices.Equal(got, [][2]bool{{true, false}, {true, true}}) {
+	if !slices.Equal(got, [][2]bool{{true, true}, {true, false}}) {
 		t.Fatalf("got %v", got)
 	}
 }

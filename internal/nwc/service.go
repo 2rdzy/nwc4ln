@@ -75,6 +75,10 @@ type connection struct {
 	serviceKey string
 	servicePub string
 	revoked    bool // At load. Only decides whether an info event is published.
+	// What the account allowed at load. They only decide what the info event lists:
+	// each request reads the account again.
+	canPay     bool
+	canInvoice bool
 }
 
 // method answers one command. It returns a result, or an error for the client.
@@ -95,8 +99,16 @@ type Service struct {
 	sendRetry time.Duration
 	payWait   time.Duration
 
-	methods     map[string]method
-	connections map[string]connection // By service public key.
+	methods map[string]method
+
+	connectionsMu sync.RWMutex
+	connections   map[string]connection // By service public key.
+	// changed tells the relay loop that connections changed. It holds one signal,
+	// which is enough: the loop reads the map afresh.
+	changed chan struct{}
+	// lastInfo is when each connection's info event was last stamped, by connection
+	// ID. Only the relay loop uses it.
+	lastInfo map[int64]int64
 
 	notifications chan ledger.Transaction
 
@@ -105,8 +117,7 @@ type Service struct {
 	work sync.WaitGroup
 }
 
-// New loads the connections. One added later is picked up at the next start. The
-// ledger must have started before Run, so that no request is answered before
+// New loads the connections. The ledger must have started before Run, so that no request is answered before
 // recovery is done.
 func New(
 	ctx context.Context, db *store.Store, n node.Node, l *ledger.Ledger, relay string, log *slog.Logger,
@@ -118,12 +129,15 @@ func New(
 		db: db.DB, node: n, ledger: l, relay: relay, log: log,
 		now: time.Now, sendFor: sendFor, sendRetry: sendRetry, payWait: payWait,
 		connections:   map[string]connection{},
+		changed:       make(chan struct{}, 1),
+		lastInfo:      map[int64]int64{},
 		notifications: make(chan ledger.Transaction, notifyQueue),
 	}
 	s.publish = s.publishToRelay
 	s.methods = map[string]method{
 		"get_info":          s.getInfo,
 		"get_balance":       s.getBalance,
+		"get_budget":        s.getBudget,
 		"pay_invoice":       s.payInvoice,
 		"make_invoice":      s.makeInvoice,
 		"lookup_invoice":    s.lookupInvoice,
@@ -136,31 +150,102 @@ func New(
 }
 
 func (s *Service) load(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, account_id, client_pubkey, service_key, revoked_at IS NOT NULL
-		FROM connections`)
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.account_id, c.client_pubkey, c.service_key,
+		c.revoked_at IS NOT NULL, a.can_pay, a.can_invoice
+		FROM connections c JOIN accounts a ON a.id = c.account_id`)
 	if err != nil {
 		return fmt.Errorf("load connections: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
+	loaded := map[string]connection{}
 	for rows.Next() {
 		var c connection
-		if err := rows.Scan(&c.id, &c.accountID, &c.clientPub, &c.serviceKey, &c.revoked); err != nil {
+		err := rows.Scan(&c.id, &c.accountID, &c.clientPub, &c.serviceKey, &c.revoked, &c.canPay, &c.canInvoice)
+		if err != nil {
 			return fmt.Errorf("load connections: %w", err)
 		}
 		if c.servicePub, err = nostr.GetPublicKey(c.serviceKey); err != nil {
 			return fmt.Errorf("connection %d: bad service key: %w", c.id, err)
 		}
-		s.connections[c.servicePub] = c
+		loaded[c.servicePub] = c
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("load connections: %w", err)
 	}
+	s.connectionsMu.Lock()
+	defer s.connectionsMu.Unlock()
+	s.connections = loaded
 	return nil
 }
 
-// methodNames lists what this service answers, for clients to read.
-func (s *Service) methodNames() []string {
-	return slices.Sorted(maps.Keys(s.methods))
+// connectionList returns the connections as they are now.
+func (s *Service) connectionList() []connection {
+	s.connectionsMu.RLock()
+	defer s.connectionsMu.RUnlock()
+	return slices.Collect(maps.Values(s.connections))
+}
+
+// reload picks up a change to the connections, and tells the relay loop. The loop
+// listens for new keys, and publishes the info events again.
+func (s *Service) reload(ctx context.Context) error {
+	if err := s.load(ctx); err != nil {
+		return err
+	}
+	select {
+	case s.changed <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// AddApp creates an app and starts serving it. See the AddApp function.
+func (s *Service) AddApp(ctx context.Context, name string, settings ledger.AppSettings) (string, error) {
+	connectionString, err := addApp(ctx, s.db, name, s.relay, settings)
+	if err != nil {
+		return "", err
+	}
+	return connectionString, s.reload(ctx)
+}
+
+// EditApp changes an app's settings. They apply to the next request.
+func (s *Service) EditApp(ctx context.Context, accountID int64, settings ledger.AppSettings) error {
+	if err := s.ledger.EditApp(ctx, accountID, settings); err != nil {
+		return err
+	}
+	return s.reload(ctx)
+}
+
+// DeleteApp revokes an app at once, and keeps its history.
+func (s *Service) DeleteApp(ctx context.Context, accountID int64) error {
+	if err := s.ledger.DeleteApp(ctx, accountID); err != nil {
+		return err
+	}
+	return s.reload(ctx)
+}
+
+// permitted decides whether settings allow a method. A connection with pay off may
+// be held by a public service, so it can read nothing about the account. Anything
+// not named here needs pay, so that a new method starts out closed.
+func permitted(method string, canPay, canInvoice bool) bool {
+	switch method {
+	case "get_info", "lookup_invoice":
+		return true
+	case "make_invoice":
+		return canInvoice
+	default:
+		return canPay
+	}
+}
+
+// methodNames lists what a connection may call, for clients to read.
+func (s *Service) methodNames(canPay, canInvoice bool) []string {
+	var names []string
+	for _, name := range slices.Sorted(maps.Keys(s.methods)) {
+		if permitted(name, canPay, canInvoice) {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // since returns where a new subscription starts. The time comes from this

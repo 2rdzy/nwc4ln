@@ -6,13 +6,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 
+	"github.com/2rdzy/nwc4ln/internal/ledger"
 	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
 	"github.com/2rdzy/nwc4ln/test/integration"
 )
 
 // Catches: our own client sharing our misreading of the protocol, and wiring from
+// secondLimitMsat is the second app's limit, which the script reads back.
+const secondLimitMsat = 21_000_000
+
 // an outside client through the relay, nwc4ln and LND, notifications included.
 func TestAcceptance(t *testing.T) {
 	n, err := integration.Load(integration.DefaultConfig())
@@ -42,6 +47,7 @@ func TestAcceptance(t *testing.T) {
 	}
 
 	s := startService(t, n)
+	s.setLimit("second", secondLimitMsat, ledger.RenewMonthly)
 	client, err := nwctest.Parse(s.connectionString)
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +63,7 @@ func TestAcceptance(t *testing.T) {
 
 	script := exec.CommandContext(t.Context(), "node", "acceptance.mjs")
 	script.Dir = work
-	script.Env = append(os.Environ(), "NWC_FIRST="+s.connectionString, "NWC_SECOND="+s.second, "REGTEST="+regtest)
+	script.Env = append(os.Environ(), "NWC_FIRST="+s.connectionString, "NWC_SECOND="+s.second, "NWC_SECOND_LIMIT="+strconv.FormatInt(secondLimitMsat, 10), "REGTEST="+regtest)
 	out, err := script.CombinedOutput()
 	t.Logf("%s", out)
 	if err != nil {
