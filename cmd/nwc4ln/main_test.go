@@ -4,8 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"io"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -127,6 +133,7 @@ func TestStartExitsCleanlyOnSignal(t *testing.T) {
 	if out, err := exec.Command(binary, "init", "--config", path).CombinedOutput(); err != nil {
 		t.Fatalf("init: %v: %s", err, out)
 	}
+	writeServiceConfig(t, path, "ws://127.0.0.1:1")
 
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT} {
 		t.Run(sig.String(), func(t *testing.T) {
@@ -160,5 +167,88 @@ func TestStartExitsCleanlyOnSignal(t *testing.T) {
 				t.Fatalf("WAL file left behind: %v", err)
 			}
 		})
+	}
+}
+
+// writeServiceConfig replaces an init config with one start can use. Nothing
+// listens on the relay or LND addresses: start must run anyway.
+func writeServiceConfig(t *testing.T, path, relay string) {
+	t.Helper()
+	dir := filepath.Dir(path)
+	cfg := config.Default(dir)
+	cfg.Relay = relay
+	cfg.LNDHost = "127.0.0.1:1"
+	cfg.LNDTLSCertPath = filepath.Join(dir, "tls.cert")
+	cfg.LNDMacaroonPath = filepath.Join(dir, "test.macaroon")
+	if err := os.WriteFile(cfg.LNDTLSCertPath, testCertificate(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.LNDMacaroonPath, []byte("macaroon"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Write(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testCertificate(t *testing.T) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// Catches: the service running with no way to hear a client.
+func TestStartRefusesBadRelay(t *testing.T) {
+	for _, relay := range []string{"", "https://relay.example", "127.0.0.1:7777"} {
+		path := filepath.Join(t.TempDir(), "nwc4ln.toml")
+		if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		writeServiceConfig(t, path, relay)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		err := run(ctx, []string{"start", "--config", path}, io.Discard)
+		cancel()
+		if err == nil || !strings.Contains(err.Error(), "relay") {
+			t.Errorf("relay %q: got %v", relay, err)
+		}
+	}
+}
+
+// Catches: data changed outside the running service.
+func TestAppAddRefusesWhileRunning(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nwc4ln.toml")
+	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	writeServiceConfig(t, path, "ws://127.0.0.1:1")
+	release, err := store.Lock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = run(t.Context(), []string{"app", "add", "--name", "shop", "--config", path}, io.Discard)
+	if !errors.Is(err, store.ErrLocked) {
+		t.Fatalf("while locked: %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := run(t.Context(), []string{"app", "add", "--name", "shop", "--config", path}, &out); err != nil {
+		t.Fatalf("after the lock is gone: %v", err)
+	}
+	if !strings.HasPrefix(out.String(), "nostr+walletconnect://") {
+		t.Fatalf("printed %q", out.String())
 	}
 }
