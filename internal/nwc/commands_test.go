@@ -112,6 +112,7 @@ func TestCommandShapes(t *testing.T) {
 	paid := e.result(e.client, "pay_invoice", map[string]any{"invoice": e.node.OutsideInvoice(3 * sat)})
 	wantKeys(t, "pay_invoice", paid, "preimage", "fees_paid")
 
+	e.now.Add(60) // The ledger clock is real, and until defaults to the service clock.
 	listed := e.result(e.client, "list_transactions", map[string]any{})
 	wantKeys(t, "list_transactions", listed, "transactions", "total_count")
 	if listed["total_count"] != float64(2) {
@@ -360,6 +361,7 @@ func TestPreimageHiddenUntilPaid(t *testing.T) {
 	if stored == "" {
 		t.Fatal("the row must hold a preimage, or this test proves nothing")
 	}
+	e.now.Add(60) // As in TestCommandShapes.
 	listed := e.list(e.client, map[string]any{"unpaid": true})
 	for what, result := range map[string]map[string]any{
 		"make_invoice":      invoice,
