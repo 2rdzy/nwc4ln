@@ -337,6 +337,12 @@ func (l *Ledger) EditApp(ctx context.Context, accountID int64, settings AppSetti
 // DeleteApp revokes an app's connections at once, and keeps its history. Its
 // pending payments finish, and income that still arrives counts as main wallet.
 func (l *Ledger) DeleteApp(ctx context.Context, accountID int64) error {
+	return l.deleteAccount(ctx, accountID, "app")
+}
+
+// deleteAccount marks an account deleted and revokes its connections in one step. Any
+// request or payment that comes later is refused.
+func (l *Ledger) deleteAccount(ctx context.Context, accountID int64, kind string) error {
 	tx, err := l.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -344,7 +350,7 @@ func (l *Ledger) DeleteApp(ctx context.Context, accountID int64) error {
 	defer func() { _ = tx.Rollback() }() // Does nothing after a commit.
 	now := l.now().Unix()
 	changed, err := changedOne(tx.ExecContext(ctx, `UPDATE accounts SET deleted_at = ?
-		WHERE id = ? AND type = 'app' AND deleted_at IS NULL`, now, accountID))
+		WHERE id = ? AND type = ? AND deleted_at IS NULL`, now, accountID, kind))
 	if err != nil {
 		return err
 	}

@@ -40,16 +40,10 @@ func (l *Ledger) Pay(ctx context.Context, request PayRequest) (Transaction, erro
 		return Transaction{}, ErrInvoiceExpired
 	}
 
-	l.mu.Lock()
-	run := l.run
-	if run == nil || run.Err() != nil {
-		l.mu.Unlock()
-		return Transaction{}, ErrNotRunning
+	run, err := l.begin()
+	if err != nil {
+		return Transaction{}, err
 	}
-	done := make(chan struct{})
-	l.work.Add(1)
-	l.mu.Unlock()
-
 	row, err := l.hold(ctx, request, invoice, decoded, amount)
 	if err != nil {
 		l.work.Done()
@@ -59,6 +53,25 @@ func (l *Ledger) Pay(ctx context.Context, request PayRequest) (Transaction, erro
 	if decoded.AmountMsat == 0 {
 		nodeAmount = amount
 	}
+	return l.carryOut(ctx, run, row, nodeAmount), nil
+}
+
+// begin counts one payment as running work, if the ledger is running. The caller
+// ends it with carryOut, or with work.Done if nothing was held.
+func (l *Ledger) begin() (context.Context, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.run == nil || l.run.Err() != nil {
+		return nil, ErrNotRunning
+	}
+	l.work.Add(1)
+	return l.run, nil
+}
+
+// carryOut does the node's part of a held payment, and waits for it until ctx ends. It
+// returns the row as it stands. The payment goes on after ctx ends.
+func (l *Ledger) carryOut(ctx, run context.Context, row Transaction, nodeAmount int64) Transaction {
+	done := make(chan struct{})
 	go func() {
 		defer l.work.Done()
 		defer close(done)
@@ -72,9 +85,9 @@ func (l *Ledger) Pay(ctx context.Context, request PayRequest) (Transaction, erro
 	if err != nil {
 		// An error here would read as "not paid". Pending is the honest answer.
 		l.log.Warn("read payment result", "hash", row.PaymentHash, "error", err)
-		return row, nil
+		return row
 	}
-	return tx, nil
+	return tx
 }
 
 func payAmount(decoded node.DecodedInvoice, requested int64) (int64, error) {
@@ -106,15 +119,9 @@ func (l *Ledger) hold(
 	defer l.holdLock.Unlock()
 	var spendable node.Spendable
 	if !subWallet { // A sub-wallet spends its own balance, whatever the node says.
-		read, cancel := context.WithTimeout(ctx, nodeReadTimeout)
-		spendable, err = l.node.Spendable(read)
-		cancel()
-		if err != nil {
-			return Transaction{}, fmt.Errorf("read spendable: %w", err)
+		if spendable, err = l.readSpendable(ctx); err != nil {
+			return Transaction{}, err
 		}
-	}
-	if l.afterNodeRead != nil {
-		l.afterNodeRead()
 	}
 	tx, err := l.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -161,25 +168,35 @@ func (l *Ledger) hold(
 	if row.ID, err = insert(ctx, tx, row); err != nil {
 		return Transaction{}, err
 	}
-	// Recorded before the commit, so that a sweep can never see this row without
-	// knowing a node call is coming, and fail it on "no record".
+	return row, l.commitHold(tx, row)
+}
+
+// commitHold stores a hold. The attempt is recorded before the commit, so that a sweep
+// can never see this row without knowing a node call is coming, and fail it on "no
+// record".
+func (l *Ledger) commitHold(tx *sql.Tx, row Transaction) error {
 	l.mu.Lock()
 	l.attempts[row.ID] = &attempt{hash: row.PaymentHash, live: true}
 	l.mu.Unlock()
 	if err := tx.Commit(); err != nil {
 		l.forget(row.ID)
-		return Transaction{}, err
+		return err
 	}
-	return row, nil
+	return nil
 }
 
 // isInternal reports whether this invoice was made here and can settle inside
 // the ledger. The hash alone is not enough: a different invoice can carry the
-// same hash, and that one goes out through the node.
+// same hash, and that one goes out through the node. An invoice of a deleted account
+// is closed: its money would go to the main wallet, and the payer would get a preimage.
 func isInternal(ctx context.Context, tx *sql.Tx, invoice, hash string) (bool, error) {
-	var state, own string
-	err := tx.QueryRowContext(ctx, `SELECT state, coalesce(invoice, '') FROM transactions
-		WHERE payment_hash = ? AND type = 'incoming'`, hash).Scan(&state, &own)
+	var (
+		state, own string
+		deleted    bool
+	)
+	err := tx.QueryRowContext(ctx, `SELECT t.state, coalesce(t.invoice, ''), a.deleted_at IS NOT NULL
+		FROM transactions t LEFT JOIN accounts a ON a.id = t.account_id
+		WHERE t.payment_hash = ? AND t.type = 'incoming'`, hash).Scan(&state, &own, &deleted)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return false, nil
@@ -187,7 +204,7 @@ func isInternal(ctx context.Context, tx *sql.Tx, invoice, hash string) (bool, er
 		return false, err
 	case own != invoice:
 		return false, nil
-	case state != StatePending:
+	case state != StatePending, deleted:
 		return false, ErrInvoiceClosed
 	}
 	return true, nil

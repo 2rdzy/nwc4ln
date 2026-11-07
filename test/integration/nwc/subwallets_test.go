@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/2rdzy/nwc4ln/internal/ledger"
 	"github.com/2rdzy/nwc4ln/internal/node/lnd"
@@ -66,20 +67,10 @@ func nodeFee(t *testing.T, n *integration.Network, hash string) int64 {
 	return 0
 }
 
-// Catches: the fee the ledger charges differing from what the node really paid, on a
-// sub-wallet that was funded from outside. It is the only test of a non-zero fee
-// through the real LND client. Sub-wallets have no command, so the ledger and service
-// run in this process, on the real node and relay.
-func TestSubWalletPaysRealFee(t *testing.T) {
-	n, err := integration.Load(integration.DefaultConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	if err := n.WaitRouted(ctx); err != nil {
-		t.Fatal(err)
-	}
+// inProcess runs the ledger and service on the real node, because a sub-wallet has no
+// command. Cancel ctx before the test ends: the cleanups wait for the service.
+func inProcess(t *testing.T, ctx context.Context, n *integration.Network) (*ledger.Ledger, *nwc.Service) {
+	t.Helper()
 	dir := t.TempDir()
 	macaroon := filepath.Join(dir, "nwc4ln.macaroon")
 	args := []string{"bakemacaroon", "--save_to", macaroon}
@@ -95,12 +86,12 @@ func TestSubWalletPaysRealFee(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = lightning.Close() }()
+	t.Cleanup(func() { _ = lightning.Close() })
 	db, err := store.Create(ctx, filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = db.Close() }()
+	t.Cleanup(func() { _ = db.Close() })
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	money := ledger.New(db, lightning, log)
 	service, err := nwc.New(ctx, db, lightning, money, n.RelayURL(), log)
@@ -110,11 +101,28 @@ func TestSubWalletPaysRealFee(t *testing.T) {
 	if err := money.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	defer money.Close()
+	t.Cleanup(money.Close)
 	var running sync.WaitGroup
 	running.Go(func() { service.Run(ctx) })
-	defer running.Wait()
+	t.Cleanup(running.Wait)
+	return money, service
+}
+
+// Catches: the fee the ledger charges differing from what the node really paid, on a
+// sub-wallet that was funded from outside. It is the only test of a non-zero fee
+// through the real LND client. Sub-wallets have no command, so the ledger and service
+// run in this process, on the real node and relay.
+func TestSubWalletPaysRealFee(t *testing.T) {
+	n, err := integration.Load(integration.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
+	if err := n.WaitRouted(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, service := inProcess(t, ctx, n)
 
 	connectionString, err := service.AddSubWallet(ctx, "holder")
 	if err != nil {
@@ -207,5 +215,116 @@ func TestSubWalletPaysRealFee(t *testing.T) {
 	}
 	if got, want := balance(), 10_000_000-paid.Fee; got != want {
 		t.Fatalf("balance %d, want %d: the unused reserve must return", got, want)
+	}
+}
+
+// Catches: fund, withdraw and delete behaving differently on a real node, whose cancel
+// and invoices the fake only imitates, and a replace or a delete not reaching the relay
+// loop.
+func TestSubWalletAdminOnRealNode(t *testing.T) {
+	const (
+		funded    = 30_000_000
+		withdrawn = 10_000_000
+	)
+	n, err := integration.Load(integration.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel() // Before the cleanups, which wait for the service to stop.
+	if err := n.WaitRouted(ctx); err != nil {
+		t.Fatal(err)
+	}
+	money, service := inProcess(t, ctx, n)
+	connectionString, err := service.AddSubWallet(ctx, "holder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wallet, err := nwctest.Parse(connectionString)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wallet.Close()
+	waitForInfo(t, wallet)
+	wallets, err := money.SubWallets(ctx)
+	if err != nil || len(wallets) != 1 {
+		t.Fatalf("sub-wallets %+v, %v", wallets, err)
+	}
+	id := wallets[0].ID
+	before, err := money.MainAvailable(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantMoney := func(balance, available int64) {
+		t.Helper()
+		gotBalance, err := money.Balance(ctx, id)
+		if err != nil || gotBalance != balance {
+			t.Fatalf("balance %d, %v, want %d", gotBalance, err, balance)
+		}
+		gotAvailable, err := money.MainAvailable(ctx)
+		if err != nil || gotAvailable != available {
+			t.Fatalf("available %d, %v, want %d", gotAvailable, err, available)
+		}
+	}
+
+	row, err := money.Fund(ctx, id, funded)
+	if err != nil || row.State != ledger.StateSettled {
+		t.Fatalf("fund %+v, %v", row, err)
+	}
+	wantMoney(funded, before-funded)
+	out, err := n.LNCLI(ctx, self, "lookupinvoice", row.PaymentHash)
+	if err != nil {
+		t.Fatalf("lookupinvoice: %v: %s", err, out)
+	}
+	var invoice struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(out, &invoice); err != nil {
+		t.Fatal(err)
+	}
+	if invoice.State != "CANCELED" {
+		t.Fatalf("fund invoice is %s on the node: it could still be paid", invoice.State)
+	}
+	row, err = money.Withdraw(ctx, id, withdrawn)
+	if err != nil || row.State != ledger.StateSettled {
+		t.Fatalf("withdraw %+v, %v", row, err)
+	}
+	wantMoney(funded-withdrawn, before-funded+withdrawn)
+
+	connectionString, err = service.ReplaceConnection(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaced, err := nwctest.Parse(connectionString)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replaced.Close()
+	waitForInfo(t, replaced)
+	if response := call(t, replaced, nwctest.NIP44, "get_balance"); response.Error != nil {
+		t.Fatalf("new key: %+v", response.Error)
+	}
+	if response := call(t, wallet, nwctest.NIP44, "get_balance"); response.Error == nil || response.Error.Code != "UNAUTHORIZED" {
+		t.Fatalf("old key: %+v", response)
+	}
+
+	if err := service.DeleteSubWallet(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		balance, err := money.Balance(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if balance == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("balance %d stayed in a deleted sub-wallet", balance)
+		}
+	}
+	wantMoney(0, before)
+	if response := call(t, replaced, nwctest.NIP44, "get_balance"); response.Error == nil || response.Error.Code != "UNAUTHORIZED" {
+		t.Fatalf("key of a deleted sub-wallet: %+v", response)
 	}
 }

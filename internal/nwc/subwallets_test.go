@@ -2,6 +2,7 @@ package nwc
 
 import (
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -198,5 +199,102 @@ func TestCapCodes(t *testing.T) {
 	wantCode(t, response, codeOther)
 	if got := e.service.refused("make_invoice", ledger.ErrTooManyInvoices); got.Code != codeRateLimited {
 		t.Fatalf("code %s", got.Code)
+	}
+}
+
+func (e *env) onlySubWallet() ledger.SubWallet {
+	e.t.Helper()
+	wallets, err := e.ledger.SubWallets(e.t.Context())
+	if err != nil || len(wallets) != 1 {
+		e.t.Fatalf("sub-wallets %+v, %v", wallets, err)
+	}
+	return wallets[0]
+}
+
+// Catches: a stolen key that still works after a replace, a new key the service does
+// not serve until a restart, or a replace that loses the money or the history.
+func TestReplaceConnection(t *testing.T) {
+	e := newEnv(t)
+	old := e.addSubWallet("holder")
+	account := e.onlySubWallet().ID
+	row, err := e.ledger.Fund(t.Context(), account, 1_000*sat)
+	if err != nil || row.State != ledger.StateSettled {
+		t.Fatalf("fund %+v, %v", row, err)
+	}
+	e.now.Add(2) // The ledger's clock is real, and until defaults to this one.
+	if got := len(e.list(old, nil)); got != 1 {
+		t.Fatalf("holder sees %d transactions", got)
+	}
+	connectionString, err := e.service.ReplaceConnection(t.Context(), account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, e.call(old, "get_balance", nil), codeUnauthorized)
+	wantCode(t, e.call(old, "pay_invoice", map[string]any{"invoice": e.node.OutsideInvoice(sat)}), codeUnauthorized)
+	replaced, err := nwctest.Parse(connectionString)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := e.balanceOf(replaced); got != 1_000*sat {
+		t.Fatalf("balance %d after a replace", got)
+	}
+	if got := len(e.list(replaced, nil)); got != 1 {
+		t.Fatalf("%d transactions after a replace", got)
+	}
+	var live, all int
+	err = e.store.DB.QueryRow(`SELECT count(revoked_at IS NULL OR NULL), count(*) FROM connections WHERE account_id = ?`,
+		account).Scan(&live, &all)
+	if err != nil || live != 1 || all != 2 {
+		t.Fatalf("%d live of %d connections, %v", live, all, err)
+	}
+	e.restart()
+	wantCode(t, e.call(old, "get_balance", nil), codeUnauthorized)
+	if got := e.balanceOf(replaced); got != 1_000*sat {
+		t.Fatalf("balance %d after a restart", got)
+	}
+}
+
+// Catches: a replace on an account it must leave alone, which would hand out a working
+// key for a deleted account or change how an app connects.
+func TestReplaceRefused(t *testing.T) {
+	e := newEnv(t)
+	e.addSubWallet("holder")
+	wallet := e.onlySubWallet().ID
+	if err := e.service.DeleteSubWallet(t.Context(), wallet); err != nil {
+		t.Fatal(err)
+	}
+	var app int64
+	if err := e.store.DB.QueryRow(`SELECT id FROM accounts WHERE type = 'app'`).Scan(&app); err != nil {
+		t.Fatal(err)
+	}
+	for name, id := range map[string]int64{"deleted": wallet, "app": app, "unknown": 9_999} {
+		if _, err := e.service.ReplaceConnection(t.Context(), id); !errors.Is(err, ledger.ErrUnknownAccount) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	var connections int
+	if err := e.store.DB.QueryRow(`SELECT count(*) FROM connections`).Scan(&connections); err != nil || connections != 2 {
+		t.Fatalf("%d connections, %v", connections, err)
+	}
+}
+
+// Catches: a key that lives on after its sub-wallet is deleted, or an info event still
+// published for it.
+func TestDeleteSubWalletRevokesAtOnce(t *testing.T) {
+	e := newEnv(t)
+	wallet := e.addSubWallet("holder")
+	if got := e.balanceOf(wallet); got != 0 {
+		t.Fatalf("balance %d", got)
+	}
+	account := e.onlySubWallet().ID
+	if err := e.service.DeleteSubWallet(t.Context(), account); err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, e.call(wallet, "get_balance", nil), codeUnauthorized)
+	wantCode(t, e.call(wallet, "make_invoice", map[string]any{"amount": sat}), codeUnauthorized)
+	for _, c := range e.service.connectionList() {
+		if c.accountID == account && !c.revoked {
+			t.Fatalf("connection %d still counts as live", c.id)
+		}
 	}
 }
