@@ -183,12 +183,12 @@ func TestLoginRefusesBadEvents(t *testing.T) {
 			return e.header(c, authEvent{extraTags: [][]string{{"payload", strings.Repeat("0", 64)}}})
 		},
 		"bad signature": func(e *env, c string) string {
-			return alterEvent(t, e.header(c, authEvent{}), `"sig":"`, `"sig":"0`, 1)
+			return changeFirstDigit(t, e.header(c, authEvent{}), "sig")
 		},
 		// The signature check hashes the fields itself and never reads the ID, so
 		// this event still has a valid signature.
 		"ID does not match the content": func(e *env, c string) string {
-			return alterEvent(t, e.header(c, authEvent{}), `"id":"`, `"id":"0`, 1)
+			return changeFirstDigit(t, e.header(c, authEvent{}), "id")
 		},
 		"no header":  func(*env, string) string { return "" },
 		"not base64": func(*env, string) string { return "Nostr !!!" },
@@ -211,19 +211,28 @@ func TestLoginRefusesBadEvents(t *testing.T) {
 
 // alterEvent edits the base64 event in a header. With drop > 0, it also cuts that
 // many characters after the edit, to keep a hex field's length.
-func alterEvent(t *testing.T, header, old, replacement string, drop int) string {
+// changeFirstDigit changes the first hex digit of a field of the event to another
+// digit. Writing a fixed digit would leave the event unchanged, and valid, whenever
+// the field already starts with that digit: one time in 16.
+func changeFirstDigit(t *testing.T, header, field string) string {
 	t.Helper()
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, "Nostr "))
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(raw)
-	at := strings.Index(text, old)
+	text := raw
+	prefix := `"` + field + `":"`
+	at := strings.Index(string(text), prefix)
 	if at < 0 {
-		t.Fatalf("%q not in %s", old, text)
+		t.Fatalf("%q not in %s", prefix, text)
 	}
-	text = text[:at] + replacement + text[at+len(old)+drop:]
-	return "Nostr " + base64.StdEncoding.EncodeToString([]byte(text))
+	at += len(prefix)
+	if text[at] == '0' {
+		text[at] = '1'
+	} else {
+		text[at] = '0'
+	}
+	return "Nostr " + base64.StdEncoding.EncodeToString(text)
 }
 
 // Catches: a login event or challenge that can be used twice, or after it expires,
