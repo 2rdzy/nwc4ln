@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/2rdzy/nwc4ln/internal/ledger"
-	"github.com/2rdzy/nwc4ln/internal/node/lnd"
 	"github.com/2rdzy/nwc4ln/internal/nwc"
 	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
 	"github.com/2rdzy/nwc4ln/internal/store"
@@ -22,7 +21,7 @@ import (
 )
 
 // routedInvoice makes an invoice on lnd-c, one hop past lnd-b, so paying it from
-// lnd-a costs a real routing fee.
+// the node costs a real routing fee.
 func routedInvoice(t *testing.T, n *integration.Network, sats int) string {
 	t.Helper()
 	out, err := n.LNCLI(t.Context(), integration.NodeLNDC, "addinvoice", "--amt", strconv.Itoa(sats))
@@ -38,9 +37,12 @@ func routedInvoice(t *testing.T, n *integration.Network, sats int) string {
 	return reply.Request
 }
 
-// nodeFee reads the fee lnd-a itself recorded for a payment.
+// nodeFee reads the fee the node itself recorded for a payment.
 func nodeFee(t *testing.T, n *integration.Network, hash string) int64 {
 	t.Helper()
+	if integration.IsCLN(self) {
+		return clnFee(t, n, hash)
+	}
 	out, err := n.LNCLI(t.Context(), self, "listpayments")
 	if err != nil {
 		t.Fatalf("listpayments: %v: %s", err, out)
@@ -63,7 +65,7 @@ func nodeFee(t *testing.T, n *integration.Network, hash string) int64 {
 			return fee
 		}
 	}
-	t.Fatalf("lnd-a has no payment %s", hash)
+	t.Fatalf("%s has no payment %s", self, hash)
 	return 0
 }
 
@@ -72,21 +74,7 @@ func nodeFee(t *testing.T, n *integration.Network, hash string) int64 {
 func inProcess(t *testing.T, ctx context.Context, n *integration.Network) (*ledger.Ledger, *nwc.Service) {
 	t.Helper()
 	dir := t.TempDir()
-	macaroon := filepath.Join(dir, "nwc4ln.macaroon")
-	args := []string{"bakemacaroon", "--save_to", macaroon}
-	for _, method := range lnd.Methods {
-		args = append(args, "uri:"+method)
-	}
-	if out, err := n.LNCLI(ctx, self, args...); err != nil {
-		t.Fatalf("bake macaroon: %v: %s", err, out)
-	}
-	lightning, err := lnd.New(lnd.Config{
-		Host: n.LNDHost(self), TLSCertPath: filepath.Join(n.LNDDir(self), "tls.cert"), MacaroonPath: macaroon,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = lightning.Close() })
+	lightning := nodeClient(t, n, dir)
 	db, err := store.Create(ctx, filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +107,7 @@ func TestSubWalletPaysRealFee(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	if err := n.WaitRouted(ctx); err != nil {
+	if err := n.WaitRoutedFrom(ctx, self); err != nil {
 		t.Fatal(err)
 	}
 	_, service := inProcess(t, ctx, n)
@@ -232,7 +220,7 @@ func TestSubWalletAdminOnRealNode(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel() // Before the cleanups, which wait for the service to stop.
-	if err := n.WaitRouted(ctx); err != nil {
+	if err := n.WaitRoutedFrom(ctx, self); err != nil {
 		t.Fatal(err)
 	}
 	money, service := inProcess(t, ctx, n)
@@ -272,18 +260,8 @@ func TestSubWalletAdminOnRealNode(t *testing.T) {
 		t.Fatalf("fund %+v, %v", row, err)
 	}
 	wantMoney(funded, before-funded)
-	out, err := n.LNCLI(ctx, self, "lookupinvoice", row.PaymentHash)
-	if err != nil {
-		t.Fatalf("lookupinvoice: %v: %s", err, out)
-	}
-	var invoice struct {
-		State string `json:"state"`
-	}
-	if err := json.Unmarshal(out, &invoice); err != nil {
-		t.Fatal(err)
-	}
-	if invoice.State != "CANCELED" {
-		t.Fatalf("fund invoice is %s on the node: it could still be paid", invoice.State)
+	if state := invoiceState(t, n, row.PaymentHash); state != "CANCELED" && state != "deleted" {
+		t.Fatalf("fund invoice is %s on the node: it could still be paid", state)
 	}
 	row, err = money.Withdraw(ctx, id, withdrawn)
 	if err != nil || row.State != ledger.StateSettled {

@@ -20,7 +20,7 @@ import (
 )
 
 // fetchBinaries returns a folder holding the pinned bitcoind, bitcoin-cli, lnd,
-// lncli and nak, and fills it on first use. A "complete" file marks a finished
+// lncli, nak and Core Lightning (under cln/), and fills it on first use. A "complete" file marks a finished
 // folder, so an interrupted fetch starts again.
 func fetchBinaries(ctx context.Context, p pins) (string, error) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
@@ -46,6 +46,9 @@ func fetchBinaries(ctx context.Context, p pins) (string, error) {
 	}
 	if err := fetchNak(ctx, p, binDir); err != nil {
 		return "", fmt.Errorf("fetch nak: %w", err)
+	}
+	if err := fetchCLN(ctx, p, binDir); err != nil {
+		return "", fmt.Errorf("fetch Core Lightning: %w", err)
 	}
 	if err := buildLND(ctx, p, binDir); err != nil {
 		return "", fmt.Errorf("build lightning-fork: %w", err)
@@ -111,6 +114,58 @@ func extractKnots(archive, binDir string) error {
 		}
 	}
 	return nil
+}
+
+// fetchCLN unpacks the Core Lightning release for this Ubuntu release into
+// binDir/cln, keeping its layout: lightningd finds its helpers and plugins from
+// its own path. Go has no xz reader, so tar unpacks it.
+func fetchCLN(ctx context.Context, p pins, binDir string) error {
+	release, err := ubuntuRelease()
+	if err != nil {
+		return err
+	}
+	sum := p.clnSHA256[release]
+	if sum == "" {
+		return fmt.Errorf("no Core Lightning build is pinned for Ubuntu %s", release)
+	}
+	url := fmt.Sprintf("%[1]s/releases/download/%[2]s/clightning-%[2]s-Ubuntu-%[3]s-amd64.tar.xz",
+		p.clnRepo, p.clnVersion, release)
+	archive := filepath.Join(binDir, "cln.tar.xz")
+	if err := download(ctx, url, archive, sum); err != nil {
+		return err
+	}
+	defer os.Remove(archive)
+	target := filepath.Join(binDir, "cln")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return err
+	}
+	if output, err := exec.CommandContext(ctx, "tar", "-xJf", archive, "-C", target).CombinedOutput(); err != nil {
+		return fmt.Errorf("unpack: %w: %s", err, output)
+	}
+	return nil
+}
+
+// ubuntuRelease reads VERSION_ID from /etc/os-release.
+func ubuntuRelease() (string, error) {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return "", err
+	}
+	var id, version string
+	for line := range strings.Lines(string(data)) {
+		key, value, _ := strings.Cut(strings.TrimSpace(line), "=")
+		value = strings.Trim(value, `"`)
+		switch key {
+		case "ID":
+			id = value
+		case "VERSION_ID":
+			version = value
+		}
+	}
+	if id != "ubuntu" {
+		return "", fmt.Errorf("core Lightning builds are pinned for Ubuntu only, this is %q", id)
+	}
+	return version, nil
 }
 
 func fetchNak(ctx context.Context, p pins, binDir string) error {

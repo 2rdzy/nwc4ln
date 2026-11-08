@@ -16,6 +16,10 @@ import (
 // never returned for a connection error.
 var ErrNotFound = errors.New("not found on the node")
 
+// ErrNeedsDescription means the node cannot make an invoice from a bare description
+// hash: Core Lightning hashes the description itself, so it needs the text too.
+var ErrNeedsDescription = errors.New("a description hash needs the description it hashes")
+
 // Node is what nwc4ln needs from a Lightning node.
 type Node interface {
 	// Info describes the node.
@@ -24,13 +28,19 @@ type Node interface {
 	Spendable(ctx context.Context) (Spendable, error)
 	// MakeInvoice creates an invoice on the node.
 	MakeInvoice(ctx context.Context, request InvoiceRequest) (Invoice, error)
-	// LookupInvoice returns an invoice made on this node, or ErrNotFound.
+	// LookupInvoice returns an invoice made on this node, or ErrNotFound. Before
+	// payment the preimage may be missing (Core Lightning): only MakeInvoice must
+	// return it.
 	LookupInvoice(ctx context.Context, hash string) (Invoice, error)
 	// CancelInvoice cancels an invoice. On success the invoice can never settle,
 	// and any part already held is failed back to its payer. It also succeeds on
 	// an invoice already canceled. It fails on a settled invoice, and on any
 	// connection error, so after a failure the invoice may already be paid: never
 	// settle it inside the ledger, and refuse the payment.
+	//
+	// Core Lightning deletes the invoice instead. A lookup then gives ErrNotFound,
+	// and a second cancel fails like a cancel of an unknown invoice. So no caller
+	// may need a repeated cancel to succeed.
 	CancelInvoice(ctx context.Context, hash string) error
 	// DecodeInvoice reads a BOLT 11 invoice. The node does this, so that nwc4ln
 	// never rejects an invoice the node accepts.
@@ -48,9 +58,10 @@ type Node interface {
 	// returns an error. It always returns an error, because the stream has no
 	// normal end. To carry on, call it again from the last SettleIndex seen.
 	//
-	// An index of 0 sends nothing from the past, only new settlements. So an
+	// From index 0, LND sends nothing from the past, only new settlements, so an
 	// invoice settled before the first index was stored is not sent here. Find
-	// those with LookupInvoice.
+	// those with LookupInvoice. Core Lightning replays every invoice ever settled
+	// instead. Crediting is idempotent, so the caller must handle both.
 	SubscribeInvoices(ctx context.Context, fromSettleIndex uint64, onSettled func(Invoice) error) error
 }
 
@@ -61,8 +72,9 @@ type Info struct {
 	Color       string
 	Network     string
 	BlockHeight uint32
-	BlockHash   string
-	Synced      bool
+	// BlockHash is empty on Core Lightning, which does not give it.
+	BlockHash string
+	Synced    bool
 }
 
 // Spendable is what a node can send, after channel reserves. Each channel counts

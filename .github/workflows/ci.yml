@@ -72,10 +72,19 @@ jobs:
         run: echo "NWC4LN_IT_DIR=$RUNNER_TEMP/nwc4ln-it" >> "$GITHUB_ENV"
       - name: Vet with the integration tag
         run: go vet -tags integration ./...
+      # The Core Lightning release build links these. The runner image may lack
+      # libsodium.
+      - name: Install Core Lightning libraries
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libsodium23 libpq5 libsqlite3-0
       - name: Start the network
         run: go run ./test/integration/cmd/regtest up
       - name: Test
         run: go test -tags integration -p 1 -count=1 -timeout 10m ./test/integration/...
+      # The same NWC tests with nwc4ln on Core Lightning instead of LND.
+      - name: Test on Core Lightning
+        run: go test -tags integration -p 1 -count=1 -timeout 15m ./test/integration/nwc/...
+        env:
+          NWC4LN_IT_NODE: cln
       - name: Show logs
         if: failure()
         run: tail -n 60 "$NWC4LN_IT_DIR"/*.log

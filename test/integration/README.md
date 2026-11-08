@@ -1,8 +1,9 @@
 # Integration network
 
-A throwaway BLAKE2b regtest network: one Knots node with BLAKE2b from height 1, three lightning-fork LND nodes, and a
-local Nostr relay (`nak serve`). `lnd-a` and `lnd-b` have a channel opened from each side. `lnd-c` sits behind `lnd-b`,
-so a payment from `lnd-a` to `lnd-c` pays a real routing fee.
+A throwaway BLAKE2b regtest network: one Knots node with BLAKE2b from height 1, three lightning-fork LND nodes, one Core
+Lightning node from the privkeyio fork, and a local Nostr relay (`nak serve`). `lnd-a` and `lnd-b` have a channel opened
+from each side, and so do `cln-a` and `lnd-b`. `lnd-c` sits behind `lnd-b`, so a payment from `lnd-a` or `cln-a` to
+`lnd-c` pays a real routing fee.
 
 ```sh
 go run ./test/integration/cmd/regtest up      # start; the first run fetches and builds, a few minutes
@@ -22,4 +23,7 @@ Needs Linux `amd64`, `git` and Go. Versions are pinned in [versions.env](version
   `~/.cache/nwc4ln-it`). `down` removes only a folder that `up` created.
 - **Acceptance.** `nwc/acceptance_test.go` runs `@getalby/sdk`, pinned in `nwc/acceptance/package-lock.json`, against a
   real nwc4ln. It needs Node.js and is used only here. `regtest lncli <node> <args>` lets the script act as `lnd-b`.
+- **Core Lightning.** `NWC4LN_IT_NODE=cln` runs the NWC tests with nwc4ln on `cln-a` instead of `lnd-a`. Its release
+  build is pinned per Ubuntu release (24.04 for CI, 26.04 locally), and it reads clnrest over HTTPS with a rune limited
+  to the client's methods. It polls Knots every second and has fixed fee rates, so figures do not move during a test.
 - **Ports** start at 19500. `up` refuses to start if one is taken.

@@ -31,6 +31,7 @@ const (
 	portLNDB       = 15
 	portLNDC       = 25
 	portRelay      = 20
+	portCLNA       = 30 // P2P, then clnrest at +1.
 )
 
 // Node names.
@@ -40,6 +41,8 @@ const (
 	NodeLNDB  = "lnd-b"
 	NodeLNDC  = "lnd-c"
 	NodeRelay = "relay"
+	// NodeCLNA is Core Lightning, with channels to and from lnd-b.
+	NodeCLNA = "cln-a"
 )
 
 // Throwaway credentials for a regtest node bound to loopback.
@@ -119,7 +122,7 @@ func checkPortsFree(base int) error {
 	offsets := []int{
 		portKnotsP2P, portKnotsOnion, portKnotsRPC, portZMQBlock, portZMQTx,
 		portLNDA, portLNDA + 1, portLNDA + 2, portLNDB, portLNDB + 1, portLNDB + 2,
-		portLNDC, portLNDC + 1, portLNDC + 2, portRelay,
+		portLNDC, portLNDC + 1, portLNDC + 2, portRelay, portCLNA, portCLNA + 1,
 	}
 	for _, offset := range offsets {
 		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", base+offset))
@@ -142,7 +145,7 @@ func (n *Network) start(ctx context.Context) error {
 	if err := n.Mine(ctx, 110); err != nil {
 		return err
 	}
-	for _, node := range []string{NodeLNDA, NodeLNDB, NodeLNDC} {
+	for _, node := range []string{NodeLNDA, NodeLNDB, NodeLNDC, NodeCLNA} {
 		if err := n.StartNode(ctx, node); err != nil {
 			return err
 		}
@@ -201,6 +204,20 @@ func (n *Network) StartNode(ctx context.Context, node string) error {
 			_, err := n.getInfo(ctx, node)
 			return err
 		})
+	case NodeCLNA:
+		if err := n.startCLN(node); err != nil {
+			return err
+		}
+		return n.waitFor(ctx, node, node+" REST", func() error {
+			if _, err := n.CLNCLI(ctx, node, "getinfo"); err != nil {
+				return err
+			}
+			conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", n.PortBase+portCLNA+1), time.Second)
+			if err != nil {
+				return err
+			}
+			return conn.Close()
+		})
 	case NodeRelay:
 		err := n.spawn(NodeRelay, "nak", "serve", "--hostname", "127.0.0.1",
 			"--port", strconv.Itoa(n.PortBase+portRelay))
@@ -238,7 +255,41 @@ func (n *Network) startLND(node string) error {
 	)
 }
 
+// clnFeerate fixes Core Lightning's fee rates, in sat per 1,000 weight units. Left
+// to its estimates, it updated a channel's fee during a payment, which moves the
+// figures tests compare exactly. With no offset on top, an HTLC output's fee
+// (172 weight units) is a whole number of sats, as on the LND channels.
+const clnFeerate = "2500"
+
+// startCLN starts Core Lightning with clnrest over HTTPS, as a real node would
+// have it. It polls Knots every second rather than every 30, and its gossip is
+// fast, so that a new channel is usable in seconds.
+func (n *Network) startCLN(node string) error {
+	dir := n.CLNDir(node)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return n.spawn(node, clnBinary,
+		"--network=regtest", "--lightning-dir="+dir, "--alias="+node,
+		fmt.Sprintf("--addr=127.0.0.1:%d", n.PortBase+portCLNA), "--disable-dns", "--disable-plugin=cln-grpc",
+		"--bitcoin-cli="+filepath.Join(n.BinDir, "bitcoin-cli"), "--bitcoin-datadir="+n.knotsDir(),
+		"--bitcoin-rpcconnect=127.0.0.1", fmt.Sprintf("--bitcoin-rpcport=%d", n.PortBase+portKnotsRPC),
+		"--bitcoin-rpcuser="+rpcUser, "--bitcoin-rpcpassword="+rpcPassword,
+		"--clnrest-host=127.0.0.1", fmt.Sprintf("--clnrest-port=%d", n.PortBase+portCLNA+1), "--clnrest-protocol=https",
+		"--developer", "--dev-bitcoind-poll=1", "--dev-fast-gossip", "--force-feerates="+clnFeerate, "--commit-feerate-offset=0",
+	)
+}
+
 func (n *Network) openChannels(ctx context.Context) error {
+	var clnAddress struct {
+		Address string `json:"bech32"`
+	}
+	if err := n.clnJSON(ctx, NodeCLNA, &clnAddress, "-k", "newaddr", "addresstype=bech32"); err != nil {
+		return err
+	}
+	if _, err := n.BitcoinCLI(ctx, "-rpcwallet=miner", "sendtoaddress", clnAddress.Address, "1"); err != nil {
+		return err
+	}
 	for _, node := range []string{NodeLNDA, NodeLNDB} {
 		var address struct {
 			Address string `json:"address"`
@@ -287,6 +338,12 @@ func (n *Network) openChannels(ctx context.Context) error {
 	if err := n.openChannelToC(ctx); err != nil {
 		return err
 	}
+	if err := n.Mine(ctx, 1); err != nil {
+		return err
+	}
+	if err := n.openChannelsCLN(ctx); err != nil {
+		return err
+	}
 	if err := n.Mine(ctx, 6); err != nil {
 		return err
 	}
@@ -298,7 +355,49 @@ func (n *Network) openChannels(ctx context.Context) error {
 	if err := n.Pay(ctx, NodeLNDB, NodeLNDA, 50_000); err != nil {
 		return err
 	}
-	return n.WaitRouted(ctx)
+	if err := n.WaitRouted(ctx); err != nil {
+		return err
+	}
+	// The same for cln-a's channel from lnd-b, once cln-a's channels work.
+	if err := n.WaitCLN(ctx); err != nil {
+		return err
+	}
+	if err := n.Pay(ctx, NodeLNDB, NodeCLNA, 50_000); err != nil {
+		return err
+	}
+	return n.WaitRoutedFrom(ctx, NodeCLNA)
+}
+
+// openChannelsCLN opens a channel each way between cln-a and lnd-b, so that
+// cln-a can pay lnd-b and lnd-c, and be paid. cln-a opens one, so its figures
+// include the commitment fee that the opener pays.
+func (n *Network) openChannelsCLN(ctx context.Context) error {
+	if err := n.waitSynced(ctx); err != nil {
+		return err
+	}
+	infoB, err := n.getInfo(ctx, NodeLNDB)
+	if err != nil {
+		return err
+	}
+	var infoCLN struct {
+		ID string `json:"id"`
+	}
+	if err := n.clnJSON(ctx, NodeCLNA, &infoCLN, "getinfo"); err != nil {
+		return err
+	}
+	address := fmt.Sprintf("%s@127.0.0.1:%d", infoB.PubKey, n.lndPort(NodeLNDB))
+	if _, err := n.CLNCLI(ctx, NodeCLNA, "connect", address); err != nil {
+		return err
+	}
+	// The push gives lnd-b an output on this channel from the start. Without one, its
+	// anchor is missing until the first HTLC, so a payment over this channel would
+	// take 330 sat more than its HTLC from cln-a's figure.
+	if _, err := n.CLNCLI(ctx, NodeCLNA, "-k", "fundchannel", "id="+infoB.PubKey, "amount=1000000",
+		"push_msat=100000000"); err != nil {
+		return err
+	}
+	_, err = n.LNCLI(ctx, NodeLNDB, "openchannel", "--node_key", infoCLN.ID, "--local_amt", "1000000")
+	return err
 }
 
 // openChannelToC puts lnd-c behind lnd-b, so that a payment from lnd-a to it pays a
@@ -320,7 +419,20 @@ func (n *Network) openChannelToC(ctx context.Context) error {
 }
 
 func (n *Network) waitSynced(ctx context.Context) error {
-	return n.waitFor(ctx, "", "LND nodes to sync", func() error {
+	return n.waitFor(ctx, "", "nodes to sync", func() error {
+		tip, err := n.BitcoinCLI(ctx, "getblockcount")
+		if err != nil {
+			return err
+		}
+		var cln struct {
+			Height int `json:"blockheight"`
+		}
+		if err := n.clnJSON(ctx, NodeCLNA, &cln, "getinfo"); err != nil {
+			return err
+		}
+		if strconv.Itoa(cln.Height) != tip {
+			return fmt.Errorf("%s is at %d, Knots at %s", NodeCLNA, cln.Height, tip)
+		}
 		for _, node := range []string{NodeLNDA, NodeLNDB, NodeLNDC} {
 			info, err := n.getInfo(ctx, node)
 			if err != nil {
@@ -353,9 +465,28 @@ func (n *Network) WaitChannels(ctx context.Context) error {
 // that channel by gossip. Call it after restarting either node in a test that needs
 // the route.
 func (n *Network) WaitRouted(ctx context.Context) error {
-	return n.waitFor(ctx, "", "payment from lnd-a to lnd-c", func() error {
-		return n.Pay(ctx, NodeLNDA, NodeLNDC, 1)
+	return n.WaitRoutedFrom(ctx, NodeLNDA)
+}
+
+// WaitRoutedFrom returns once a node can pay lnd-c through lnd-b.
+func (n *Network) WaitRoutedFrom(ctx context.Context, node string) error {
+	return n.waitFor(ctx, "", "payment from "+node+" to lnd-c", func() error {
+		return n.Pay(ctx, node, NodeLNDC, 1)
 	})
+}
+
+// WaitCLN returns once cln-a and lnd-b can pay each other. Call it after
+// restarting either in a test that uses cln-a.
+func (n *Network) WaitCLN(ctx context.Context) error {
+	for _, nodes := range [][2]string{{NodeCLNA, NodeLNDB}, {NodeLNDB, NodeCLNA}} {
+		err := n.waitFor(ctx, "", fmt.Sprintf("payment from %s to %s", nodes[0], nodes[1]), func() error {
+			return n.Pay(ctx, nodes[0], nodes[1], 1)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // waitFor polls check until it passes. If node is set and has died, it stops
@@ -399,12 +530,17 @@ func (n *Network) spawn(node, binary string, args ...string) error {
 func (n *Network) logPath(node string) string { return filepath.Join(n.Dir, node+".log") }
 func (n *Network) pidPath(node string) string { return filepath.Join(n.Dir, node+".pid") }
 
+// clnBinary is lightningd's path in the binary folder.
+var clnBinary = filepath.Join("cln", "usr", "bin", "lightningd")
+
 func binaryOf(node string) string {
 	switch node {
 	case NodeKnots:
 		return "bitcoind"
 	case NodeRelay:
 		return "nak"
+	case NodeCLNA:
+		return clnBinary
 	}
 	return "lnd"
 }
@@ -428,6 +564,9 @@ func (n *Network) pidOf(node string) int {
 }
 
 func (n *Network) running(node string) bool { return n.pidOf(node) != 0 }
+
+// Running says whether a node's process is up.
+func (n *Network) Running(node string) bool { return n.running(node) }
 
 // StopNode stops one node by its recorded PID. SIGTERM is a clean shutdown for
 // all of them. SIGKILL follows only if the node does not exit in time.
@@ -463,7 +602,7 @@ func (n *Network) waitExit(node string, limit time.Duration) bool {
 
 func (n *Network) stopAll() error {
 	var errs []error
-	for _, node := range []string{NodeRelay, NodeLNDC, NodeLNDB, NodeLNDA, NodeKnots} {
+	for _, node := range []string{NodeRelay, NodeCLNA, NodeLNDC, NodeLNDB, NodeLNDA, NodeKnots} {
 		errs = append(errs, n.StopNode(node))
 	}
 	return errors.Join(errs...)

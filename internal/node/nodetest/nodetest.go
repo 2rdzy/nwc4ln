@@ -26,6 +26,21 @@ type Harness struct {
 	// in flight. It returns the payment hash, and fail, which makes the payee give the
 	// payment back.
 	StartHeld func(t *testing.T, amountMsat int64) (hash string, fail func())
+
+	// The ways a node may differ from LND, which the ledger allows for. Each is
+	// still tested: the zero value is LND's behaviour.
+
+	// CancelDeletes means CancelInvoice removes the invoice, as on Core Lightning.
+	// A lookup then gives ErrNotFound, and a second cancel fails.
+	CancelDeletes bool
+	// LookupHidesPreimage means LookupInvoice gives no preimage before payment.
+	// MakeInvoice must still return it.
+	LookupHidesPreimage bool
+	// ReplaysFromZero means SubscribeInvoices from index 0 sends every invoice ever
+	// settled, rather than none.
+	ReplaysFromZero bool
+	// NoBlockHash means Info has no block hash.
+	NoBlockHash bool
 }
 
 const (
@@ -93,6 +108,7 @@ func Run(t *testing.T, h Harness) {
 		{"RepeatPaymentIsNotFailure", testRepeatPaymentIsNotFailure},
 		{"SelfPaymentLeavesNoRecord", testSelfPaymentLeavesNoRecord},
 		{"PayRefusesZeroFeeLimit", testPayRefusesZeroFeeLimit},
+		{"UnroutablePaymentFails", testUnroutablePaymentFails},
 		{"SpendableFollowsMoney", testSpendableFollowsMoney},
 		{"SpendableDuringFlight", testSpendableDuringFlight},
 		{"DescriptionLimit", testDescriptionLimit},
@@ -111,7 +127,7 @@ func testInfo(t *testing.T, h Harness) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.PubKey == "" || info.Network == "" || info.BlockHeight == 0 || info.BlockHash == "" {
+	if info.PubKey == "" || info.Network == "" || info.BlockHeight == 0 || (info.BlockHash == "") != h.NoBlockHash {
 		t.Fatalf("incomplete info: %+v", info)
 	}
 }
@@ -133,7 +149,12 @@ func testInvoiceRoundTrip(t *testing.T, h Harness) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if found.Hash != made.Hash || found.PaymentRequest != made.PaymentRequest || found.Preimage != made.Preimage {
+	wantPreimage := made.Preimage
+	if h.LookupHidesPreimage {
+		wantPreimage = ""
+	}
+	if found.Hash != made.Hash || found.PaymentRequest != made.PaymentRequest || found.Preimage != wantPreimage ||
+		!found.CreatedAt.Equal(made.CreatedAt) || !found.ExpiresAt.Equal(made.ExpiresAt) {
 		t.Fatalf("found %+v, made %+v", found, made)
 	}
 	decoded, err := h.Node.DecodeInvoice(ctx, made.PaymentRequest)
@@ -149,10 +170,15 @@ func testInvoiceRoundTrip(t *testing.T, h Harness) {
 	}
 }
 
-// Catches: make_invoice dropping description_hash, which LNURL pay needs.
+// Catches: make_invoice dropping description_hash, which LNURL pay needs. The
+// description comes too, because Core Lightning hashes it itself.
 func testDescriptionHash(t *testing.T, h Harness) {
-	hash := strings.Repeat("ef", 32)
-	made, err := h.Node.MakeInvoice(t.Context(), node.InvoiceRequest{AmountMsat: 1_000, DescriptionHash: hash})
+	metadata := `[["text/plain","nodetest"]]`
+	sum := sha256.Sum256([]byte(metadata))
+	hash := hex.EncodeToString(sum[:])
+	made, err := h.Node.MakeInvoice(t.Context(), node.InvoiceRequest{
+		AmountMsat: 1_000, Description: metadata, DescriptionHash: hash,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,17 +203,26 @@ func testSettledInvoiceIsPaid(t *testing.T, h Harness) {
 	}
 }
 
-// Catches: R10 trusting a cancel that did not stop the invoice. A second cancel
-// must pass too, so that a retry after a lost reply does not refuse the payment.
+// Catches: R10 trusting a cancel that did not stop the invoice. On LND a second
+// cancel must pass too, so that a retry after a lost reply does not refuse the
+// payment. Where a cancel deletes, the invoice must be gone, which the ledger reads
+// as canceled (catchUp), and a second cancel fails, which refuses the payment.
 func testCancelOpenInvoice(t *testing.T, h Harness) {
 	ctx := t.Context()
 	invoice := h.invoice(t)
-	for range 2 {
-		if err := h.Node.CancelInvoice(ctx, invoice.Hash); err != nil {
-			t.Fatal(err)
-		}
+	if err := h.Node.CancelInvoice(ctx, invoice.Hash); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Node.CancelInvoice(ctx, invoice.Hash); (err != nil) != h.CancelDeletes {
+		t.Fatalf("second cancel: %v", err)
 	}
 	found, err := h.Node.LookupInvoice(ctx, invoice.Hash)
+	if h.CancelDeletes {
+		if !errors.Is(err, node.ErrNotFound) {
+			t.Fatalf("lookup after cancel: %+v, %v; want ErrNotFound", found, err)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,6 +330,21 @@ func testPayRefusesZeroFeeLimit(t *testing.T, h Harness) {
 	bad.FeeLimitMsat = 0
 	if _, err := h.Node.Pay(t.Context(), bad); err == nil {
 		t.Fatal("Pay passed with no fee limit")
+	}
+}
+
+// Catches: a payment that can never go out left pending, so its hold stays and the
+// client hears "payment pending" instead of a failure. Both nodes must fail it at once.
+func testUnroutablePaymentFails(t *testing.T, h Harness) {
+	ctx := t.Context()
+	// More than any test node can send.
+	payment, err := h.Node.Pay(ctx, request(h.OutsideInvoice(t, 3_000_000_000)))
+	if err != nil || payment.State != node.PaymentFailed || payment.Hash == "" {
+		t.Fatalf("got %+v, %v; want a final failure", payment, err)
+	}
+	tracked, err := h.Node.TrackPayment(ctx, payment.Hash)
+	if err != nil || (tracked.State != node.PaymentFailed && tracked.State != node.PaymentNoRecord) {
+		t.Fatalf("tracked %+v, %v; want failed or no record", tracked, err)
 	}
 }
 
@@ -446,11 +496,22 @@ func testSubscribeResumesFromIndex(t *testing.T, h Harness) {
 	}
 }
 
-// Catches: the ledger believing index 0 replays everything. It does not, so the
-// ledger must find those invoices with LookupInvoice (R11).
+// Catches: the ledger believing index 0 replays everything. On LND it does not,
+// so the ledger must find those invoices with LookupInvoice (R11). Where it does
+// replay, the past invoice must come with its own index, so it credits the right row.
 func testSubscribeFromZeroHasNoBacklog(t *testing.T, h Harness) {
 	old := h.settled(t)
 	seen, _ := h.subscribe(t, 0)
+	if h.ReplaysFromZero {
+		for {
+			if got := next(t, seen); got.Hash == old.Hash {
+				if got.SettleIndex != old.SettleIndex || got.PaidMsat != amountMsat || got.State != node.InvoiceSettled {
+					t.Fatalf("replayed %+v, want %+v", got, old)
+				}
+				return
+			}
+		}
+	}
 	// The subscription may not be in place yet, and new invoices sent before it
 	// are lost at index 0, so pay until one arrives.
 	deadline := time.Now().Add(wait)

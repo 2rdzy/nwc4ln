@@ -16,15 +16,16 @@ import (
 
 	"github.com/2rdzy/nwc4ln/internal/config"
 	"github.com/2rdzy/nwc4ln/internal/ledger"
-	"github.com/2rdzy/nwc4ln/internal/node/lnd"
 	"github.com/2rdzy/nwc4ln/internal/nwc"
 	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
 	"github.com/2rdzy/nwc4ln/internal/store"
 	"github.com/2rdzy/nwc4ln/test/integration"
 )
 
+// self is the node nwc4ln runs on: see integration.SelfNode.
+var self = integration.SelfNode()
+
 const (
-	self        = integration.NodeLNDA
 	callTimeout = 10 * time.Second
 	// silence is how long to wait for a reply that must not come.
 	silence = 3 * time.Second
@@ -61,23 +62,13 @@ func startService(t *testing.T, n *integration.Network) *service {
 	if out, err := exec.CommandContext(ctx, binary, "init", "--admin", adminNpub, "--config", path).CombinedOutput(); err != nil {
 		t.Fatalf("init: %v: %s", err, out)
 	}
-	macaroon := filepath.Join(dir, "nwc4ln.macaroon")
-	args := []string{"bakemacaroon", "--save_to", macaroon}
-	for _, method := range lnd.Methods {
-		args = append(args, "uri:"+method)
-	}
-	if out, err := n.LNCLI(ctx, self, args...); err != nil {
-		t.Fatalf("bake macaroon: %v: %s", err, out)
-	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Default(dir)
 	cfg.Listen = "127.0.0.1:0" // Any free port: the log names it.
 	cfg.Relay = n.RelayURL()
-	cfg.LNDHost = n.LNDHost(self)
-	cfg.LNDTLSCertPath = filepath.Join(n.LNDDir(self), "tls.cert")
-	cfg.LNDMacaroonPath = macaroon
+	setNode(t, n, &cfg, dir)
 	if err := config.Write(path, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -207,10 +198,18 @@ func TestNWC(t *testing.T) {
 				BlockHeight uint32 `json:"block_height"`
 				BlockHash   string `json:"block_hash"`
 			}
-			if err := json.Unmarshal(response.Result, &result); err != nil {
+			var fields map[string]any
+			if err := json.Unmarshal(response.Result, &result); err != nil || json.Unmarshal(response.Result, &fields) != nil {
 				t.Fatal(err)
 			}
-			if len(result.PubKey) != 66 || result.Network != "regtest" || result.BlockHeight == 0 || len(result.BlockHash) != 64 {
+			// Core Lightning gives no block hash, so the field is left out.
+			hashLength := 64
+			if integration.IsCLN(self) {
+				hashLength = 0
+			}
+			_, hasHash := fields[`block_hash`]
+			if len(result.PubKey) != 66 || result.Network != "regtest" || result.BlockHeight == 0 ||
+				len(result.BlockHash) != hashLength || hasHash != (hashLength > 0) {
 				t.Fatalf("%q: got %+v", scheme, result)
 			}
 		}
