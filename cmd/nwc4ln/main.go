@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -18,12 +19,14 @@ import (
 	"github.com/2rdzy/nwc4ln/internal/node/lnd"
 	"github.com/2rdzy/nwc4ln/internal/nwc"
 	"github.com/2rdzy/nwc4ln/internal/store"
+	"github.com/2rdzy/nwc4ln/internal/web"
 )
 
 const (
 	databaseName = "nwc4ln.db"
 	dataDirMode  = 0o700
-	usage        = "usage: nwc4ln <init|start|app add --name name [--invoice]> [--config path], or nwc4ln backup [--config path] <file>"
+	usage        = "usage: nwc4ln init [--admin npub] [--config path], nwc4ln <start|app add --name name [--invoice]> [--config path], " +
+		"nwc4ln backup [--config path] <file>, or nwc4ln set-admin [--config path] <npub>"
 )
 
 func main() {
@@ -52,12 +55,13 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	configPath := flags.String("config", "", "config file (default ~/.nwc4ln/nwc4ln.toml)")
 	name := flags.String("name", "", "app name (app add)")
 	canInvoice := flags.Bool("invoice", false, "let the app make invoices (app add)")
+	admin := flags.String("admin", "", "the admin's npub (init)")
 	if err := flags.Parse(rest); err != nil {
 		return err
 	}
 	wantArgs := 0
-	if command == "backup" {
-		wantArgs = 1 // The file to write.
+	if command == "backup" || command == "set-admin" {
+		wantArgs = 1 // The file to write, or the npub.
 	}
 	if flags.NArg() != wantArgs {
 		return errors.New(usage)
@@ -75,13 +79,15 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	switch command {
 	case "init":
-		return runInit(ctx, path, out)
+		return runInit(ctx, path, *admin, out)
 	case "start":
 		return runStart(ctx, path, out)
 	case "app add":
 		return runAppAdd(ctx, path, *name, *canInvoice, out)
 	case "backup":
 		return runBackup(ctx, path, flags.Arg(0), out)
+	case "set-admin":
+		return runSetAdmin(ctx, path, flags.Arg(0), out)
 	default:
 		return errors.New(usage)
 	}
@@ -89,8 +95,17 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 
 // runInit creates the data folder, database and config. It refuses to run over
 // existing data, because that would lose the ledger. The config is written
-// last, so a failed init can be run again once the cause is fixed.
-func runInit(ctx context.Context, configPath string, out io.Writer) error {
+// last, so a failed init can be run again once the cause is fixed. The admin key is
+// optional here: set-admin sets it later.
+func runInit(ctx context.Context, configPath, adminNpub string, out io.Writer) error {
+	adminKey := ""
+	if adminNpub != "" {
+		key, err := nwc.DecodeNpub(adminNpub)
+		if err != nil {
+			return err
+		}
+		adminKey = key
+	}
 	dataDir := filepath.Dir(configPath)
 	databasePath := filepath.Join(dataDir, databaseName)
 	for _, path := range []string{configPath, databasePath} {
@@ -107,6 +122,11 @@ func runInit(ctx context.Context, configPath string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if adminKey != "" {
+		if err := db.SetAdminKey(ctx, adminKey); err != nil {
+			return errors.Join(err, db.Close())
+		}
+	}
 	if err := db.Close(); err != nil {
 		return fmt.Errorf("close database: %w", err)
 	}
@@ -114,13 +134,17 @@ func runInit(ctx context.Context, configPath string, out io.Writer) error {
 		return err
 	}
 	fmt.Fprintln(out, "created", configPath)
+	if adminKey == "" {
+		fmt.Fprintln(out, "no admin key is set: run nwc4ln set-admin <npub> before you log in")
+	}
 	return nil
 }
 
 // runStart serves NWC requests until a stop signal. A relay or node that is down
 // does not stop it: the service keeps trying, and answers what it can. It joins
 // the relay only after the ledger has recovered, so that no request is answered
-// before that. It refuses to run on a node that is not the ledger's.
+// before that. It refuses to run on a node that is not the ledger's. The admin UI
+// starts first, so the admin can see the figures are unknown while the node is down.
 func runStart(ctx context.Context, configPath string, out io.Writer) (err error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -139,6 +163,10 @@ func runStart(ctx context.Context, configPath string, out io.Writer) (err error)
 	if err := nwc.CheckRelay(cfg.Relay); err != nil {
 		return err
 	}
+	adminKey, err := db.AdminKey(ctx)
+	if err != nil {
+		return err
+	}
 	client, err := lnd.New(lnd.Config{Host: cfg.LNDHost, TLSCertPath: cfg.LNDTLSCertPath, MacaroonPath: cfg.LNDMacaroonPath})
 	if err != nil {
 		return err
@@ -150,6 +178,28 @@ func runStart(ctx context.Context, configPath string, out io.Writer) (err error)
 		return err
 	}
 	money.OnSettled(service.Notify)
+	ui, err := web.New(web.Config{
+		AdminKey: adminKey, AllowedHosts: cfg.AllowedHosts, Ledger: money, Log: slog.Default(),
+	})
+	if err != nil {
+		return err
+	}
+	listener, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		return fmt.Errorf("admin UI: %w", err)
+	}
+	// The UI stops before the database closes, because the defers run in reverse.
+	uiCtx, stopUI := context.WithCancel(ctx)
+	uiDone := make(chan error, 1)
+	go func() { uiDone <- ui.Serve(uiCtx, listener) }()
+	defer func() {
+		stopUI()
+		err = errors.Join(err, <-uiDone)
+	}()
+	slog.Info("admin UI listening", "url", "http://"+listener.Addr().String())
+	if adminKey == "" {
+		slog.Warn("no admin key is set, so nobody can log in: stop the service and run nwc4ln set-admin <npub>")
+	}
 	fmt.Fprintln(out, "started")
 	defer money.Close()
 	if err := money.StartRetrying(ctx); err != nil {
@@ -202,5 +252,34 @@ func runBackup(ctx context.Context, configPath, dest string, out io.Writer) erro
 		return err
 	}
 	fmt.Fprintln(out, "backup written to", dest)
+	return nil
+}
+
+// runSetAdmin replaces the admin key. It takes the data folder lock, so it refuses
+// while the service runs. Sessions live in memory, so the old admin's end with the
+// stop that this needs.
+func runSetAdmin(ctx context.Context, configPath, npub string, out io.Writer) (err error) {
+	key, err := nwc.DecodeNpub(npub)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	release, err := store.Lock(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, release()) }()
+	db, err := store.Open(ctx, filepath.Join(cfg.DataDir, databaseName))
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	if err := db.SetAdminKey(ctx, key); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "admin key set to", npub)
 	return nil
 }

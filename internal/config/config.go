@@ -25,6 +25,9 @@ type Config struct {
 	LNDHost         string `toml:"lnd_host"`
 	LNDTLSCertPath  string `toml:"lnd_tls_cert_path"`
 	LNDMacaroonPath string `toml:"lnd_macaroon_path"`
+	// AllowedHosts are extra host names the admin UI answers to, such as a local
+	// proxy's name. localhost, 127.0.0.1 and ::1 are always allowed.
+	AllowedHosts []string `toml:"allowed_hosts,omitempty"`
 }
 
 // Default returns the settings for a new config file.
@@ -88,5 +91,27 @@ func (c Config) validate() error {
 	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
 		return fmt.Errorf("listen must be host:port, got %q: %w", c.Listen, err)
 	}
+	if !IsLoopback(c.Listen) {
+		return fmt.Errorf("listen must be a loopback address, got %q: use an SSH tunnel or a local proxy for remote use", c.Listen)
+	}
+	for _, host := range c.AllowedHosts {
+		if host == "" || strings.ContainsAny(host, ":/ ") {
+			return fmt.Errorf("allowed_hosts takes host names without a port, got %q", host)
+		}
+	}
 	return nil
+}
+
+// IsLoopback reports whether a host:port address is on the loopback interface
+// only. An empty host would listen on every interface.
+func IsLoopback(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

@@ -1,0 +1,176 @@
+// Package web is the admin UI. Only the admin logs in, with a Nostr key, and every
+// page except the login page needs that session.
+package web
+
+import (
+	"context"
+	"embed"
+	"errors"
+	"html/template"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/2rdzy/nwc4ln/internal/ledger"
+)
+
+//go:embed templates/*.html
+var templateFiles embed.FS
+
+//go:embed static
+var staticFiles embed.FS
+
+// Ledger gives the figures the UI shows.
+type Ledger interface {
+	Overview(ctx context.Context) (ledger.Overview, error)
+}
+
+// Config sets up the server.
+type Config struct {
+	// AdminKey is the admin's public key in hex. With none, nobody can log in.
+	AdminKey string
+	// AllowedHosts are extra host names to answer to, besides the loopback names.
+	AllowedHosts []string
+	Ledger       Ledger
+	Log          *slog.Logger
+}
+
+// Server is the admin UI.
+type Server struct {
+	adminKey string
+	hosts    map[string]bool
+	ledger   Ledger
+	log      *slog.Logger
+	pages    *template.Template
+	handler  http.Handler
+
+	now func() time.Time // Changed only by tests.
+
+	mu         sync.Mutex
+	challenges map[string]time.Time // Challenge to when it was given.
+	order      []string             // Challenges, oldest first.
+	sessions   map[string]time.Time // Session token to when it ends.
+}
+
+// New returns the admin UI.
+func New(cfg Config) (*Server, error) {
+	pages, err := template.New("").Funcs(template.FuncMap{"sats": formatSats}).ParseFS(templateFiles, "templates/*.html")
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{
+		adminKey: cfg.AdminKey, ledger: cfg.Ledger, log: cfg.Log, pages: pages, now: time.Now,
+		hosts:      map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true},
+		challenges: map[string]time.Time{}, sessions: map[string]time.Time{},
+	}
+	for _, host := range cfg.AllowedHosts {
+		s.hosts[strings.ToLower(strings.Trim(host, "[]"))] = true
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /login", s.loginPage)
+	mux.HandleFunc("POST /login", s.login)
+	mux.HandleFunc("POST /logout", s.logout)
+	mux.Handle("GET /static/", http.FileServerFS(staticFiles))
+	mux.HandleFunc("GET /{$}", s.dashboard)
+	s.handler = s.guard(mux)
+	return s, nil
+}
+
+// public lists what can be reached without a session. Everything else needs one,
+// so that a new page cannot be added without the check.
+func public(r *http.Request) bool {
+	return r.URL.Path == "/login" || strings.HasPrefix(r.URL.Path, "/static/")
+}
+
+// ServeHTTP checks every request before it reaches a page.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.handler.ServeHTTP(w, r)
+}
+
+// guard runs the checks that apply to every request, in this order: the host,
+// against DNS rebinding; the origin of anything that is not a GET, against requests
+// from other sites; then the session.
+func (s *Server) guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header := w.Header()
+		header.Set("Content-Security-Policy",
+			"default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+		header.Set("X-Frame-Options", "DENY")
+		header.Set("X-Content-Type-Options", "nosniff")
+		// Not no-referrer: under it, browsers send "Origin: null" on a form POST, and
+		// the origin check would refuse every form, logout included.
+		header.Set("Referrer-Policy", "same-origin")
+		header.Set("Cache-Control", "no-store")
+		if !s.allowedHost(r.Host) {
+			http.Error(w, "unknown host", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && !sameOrigin(r) {
+			http.Error(w, "cross-site request refused", http.StatusForbidden)
+			return
+		}
+		if !public(r) && !s.hasSession(r) {
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+			http.Error(w, "log in first", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// allowedHost checks the Host header by name. The port is not checked, so an SSH
+// tunnel on another local port works. A rebinding attack sends its own name.
+func (s *Server) allowedHost(hostPort string) bool {
+	host := hostPort
+	if h, _, err := net.SplitHostPort(hostPort); err == nil {
+		host = h
+	}
+	return host != "" && s.hosts[strings.ToLower(strings.Trim(host, "[]"))]
+}
+
+// sameOrigin requires an Origin header naming the host the request was sent to.
+// Browsers send it on every POST, so a missing one is refused too.
+func sameOrigin(r *http.Request) bool {
+	origin, err := url.Parse(r.Header.Get("Origin"))
+	if err != nil || (origin.Scheme != "http" && origin.Scheme != "https") {
+		return false
+	}
+	return origin.Host == r.Host && origin.Path == "" && origin.User == nil
+}
+
+// Serve answers on the listener until the context ends, then waits for running
+// requests to finish.
+func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
+	server := &http.Server{
+		Handler: s, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+		WriteTimeout: 30 * time.Second, IdleTimeout: time.Minute,
+	}
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+	}
+	stop, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	err := server.Shutdown(stop)
+	if serveErr := <-done; !errors.Is(serveErr, http.ErrServerClosed) {
+		err = errors.Join(err, serveErr)
+	}
+	return err
+}
+
+func (s *Server) render(w http.ResponseWriter, name string, data any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.pages.ExecuteTemplate(w, name, data); err != nil {
+		s.log.Error("render page", "page", name, "error", err)
+	}
+}

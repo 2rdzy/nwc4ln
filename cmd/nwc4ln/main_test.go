@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/2rdzy/nwc4ln/internal/config"
+	"github.com/2rdzy/nwc4ln/internal/nwc"
+	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
 	"github.com/2rdzy/nwc4ln/internal/store"
 )
 
@@ -176,6 +178,7 @@ func writeServiceConfig(t *testing.T, path, relay string) {
 	t.Helper()
 	dir := filepath.Dir(path)
 	cfg := config.Default(dir)
+	cfg.Listen = "127.0.0.1:0" // Any free port, so tests cannot clash.
 	cfg.Relay = relay
 	cfg.LNDHost = "127.0.0.1:1"
 	cfg.LNDTLSCertPath = filepath.Join(dir, "tls.cert")
@@ -275,5 +278,71 @@ func TestBackupWhileRunning(t *testing.T) {
 	if err := run(t.Context(), []string{"backup", "--config", path}, io.Discard); err == nil ||
 		!strings.Contains(err.Error(), "usage") {
 		t.Fatalf("no file: %v", err)
+	}
+}
+
+func adminKeyIn(t *testing.T, dir string) string {
+	t.Helper()
+	db, err := store.Open(t.Context(), filepath.Join(dir, databaseName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	key, err := db.AdminKey(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+// Catches: an admin key from init or set-admin that is not stored, or stored wrongly;
+// a set-admin that runs beside the service; and a bad npub accepted as a key.
+func TestAdminKey(t *testing.T) {
+	_, first := nwctest.NewKey()
+	_, second := nwctest.NewKey()
+	firstNpub, err := nwc.EncodeNpub(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondNpub, err := nwc.EncodeNpub(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nwc4ln.toml")
+	if err := run(t.Context(), []string{"init", "--admin", "npub1nonsense", "--config", path}, io.Discard); err == nil {
+		t.Fatal("init took a bad npub")
+	}
+	if err := run(t.Context(), []string{"init", "--admin", firstNpub, "--config", path}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if got := adminKeyIn(t, dir); got != first {
+		t.Fatalf("admin key %q after init, want %q", got, first)
+	}
+
+	release, err := store.Lock(dir) // The service is running.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run(t.Context(), []string{"set-admin", "--config", path, secondNpub}, io.Discard); !errors.Is(err, store.ErrLocked) {
+		t.Fatalf("set-admin while running: %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	nsec := "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5"
+	for _, bad := range []string{nsec, "npub1nonsense", second} {
+		if err := run(t.Context(), []string{"set-admin", "--config", path, bad}, io.Discard); err == nil {
+			t.Errorf("set-admin took %q", bad)
+		}
+	}
+	if got := adminKeyIn(t, dir); got != first {
+		t.Fatalf("admin key changed to %q by a refused set-admin", got)
+	}
+	if err := run(t.Context(), []string{"set-admin", "--config", path, secondNpub}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if got := adminKeyIn(t, dir); got != second {
+		t.Fatalf("admin key %q after set-admin, want %q", got, second)
 	}
 }

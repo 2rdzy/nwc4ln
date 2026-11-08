@@ -298,25 +298,67 @@ func (l *Ledger) MainAvailable(ctx context.Context) (int64, error) {
 // one lock, like a payment check, so that no payment can settle between the node's
 // figure and the rows. It fails if the node cannot be asked.
 func (l *Ledger) Shortfall(ctx context.Context) (int64, error) {
+	overview, err := l.Overview(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return overview.ShortfallMsat, nil
+}
+
+// Overview is the admin's view of the money, all from one node read.
+type Overview struct {
+	// NodeSpendableMsat is the node's figure on active channels, with the ledger's own
+	// payments in flight added back, as R5 reads it. It equals SubWalletMsat plus
+	// HoldsMsat plus MainAvailableMsat.
+	NodeSpendableMsat int64
+	// SubWalletMsat is all sub-wallet money, deleted ones not yet moved included.
+	SubWalletMsat int64
+	// HoldsMsat is what pending payments hold.
+	HoldsMsat int64
+	// MainAvailableMsat is R5. It can be below 0.
+	MainAvailableMsat int64
+	// ShortfallMsat is R14. Above 0 is a shortfall.
+	ShortfallMsat int64
+}
+
+// Overview reads the node once, under the one lock, and gives R5 and R14 with the
+// figures they come from, so that they agree with each other. It holds the lock
+// through a node read, so do not call it often. It fails if the node cannot be asked:
+// a figure is never guessed.
+func (l *Ledger) Overview(ctx context.Context) (Overview, error) {
 	l.holdLock.Lock()
 	defer l.holdLock.Unlock()
 	spendable, err := l.readSpendable(ctx)
 	if err != nil {
-		return 0, err
+		return Overview{}, err
 	}
-	inFlight, err := inFlightMsat(ctx, l.db, spendable.Outgoing, false)
+	available, err := availableFrom(ctx, l.db, spendable)
 	if err != nil {
-		return 0, err
+		return Overview{}, err
+	}
+	activeFlight, err := inFlightMsat(ctx, l.db, spendable.Outgoing, true)
+	if err != nil {
+		return Overview{}, err
+	}
+	allFlight, err := inFlightMsat(ctx, l.db, spendable.Outgoing, false)
+	if err != nil {
+		return Overview{}, err
 	}
 	promised, err := subWalletTotal(ctx, l.db)
 	if err != nil {
-		return 0, err
+		return Overview{}, err
 	}
 	holds, err := pendingHolds(ctx, l.db)
 	if err != nil {
-		return 0, err
+		return Overview{}, err
 	}
-	return promised + holds - spendable.AllMsat - inFlight, nil
+	return Overview{
+		NodeSpendableMsat: spendable.ActiveMsat + activeFlight,
+		SubWalletMsat:     promised,
+		HoldsMsat:         holds,
+		MainAvailableMsat: available,
+		ShortfallMsat:     promised + holds - spendable.AllMsat - allFlight,
+	}, nil
 }
 
 // AppBudget returns an app's limit in the current period, or nil if it has none. A
