@@ -67,11 +67,30 @@ type Info struct {
 
 // Spendable is what a node can send, after channel reserves. Each channel counts
 // for at least 0, so one below its reserve takes nothing from the others.
+//
+// A payment in flight has already left both figures, as on LND. Outgoing lists
+// what each such payment took, so that the ledger can add back the ones it also
+// holds, and only those.
 type Spendable struct {
 	// ActiveMsat covers active channels: what can go out now.
 	ActiveMsat int64
 	// AllMsat covers all open channels, so a peer that is offline still counts.
 	AllMsat int64
+	// Outgoing lists the HTLCs in flight out of this node, on all open channels.
+	Outgoing []HTLC
+}
+
+// HTLC is one part of an outgoing payment in flight. A payment split into parts
+// has one HTLC per part, all with the same hash.
+type HTLC struct {
+	Hash       string
+	AmountMsat int64
+	// CostMsat is what the HTLC took from the figures: its amount, plus on LND the
+	// commitment fee for its output when this node opened the channel. It returns
+	// if the HTLC fails.
+	CostMsat int64
+	// Active says whether its channel counts in ActiveMsat.
+	Active bool
 }
 
 // InvoiceState is the state of an invoice. The zero value is the only one that

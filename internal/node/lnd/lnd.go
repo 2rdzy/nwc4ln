@@ -164,8 +164,11 @@ func (c *Client) Spendable(ctx context.Context) (node.Spendable, error) {
 // spendable sums local balance less our channel reserve. A channel with no
 // constraints is an error, because treating its reserve as 0 would overstate
 // the wallet. Fractions of a sat are not reported, which undercounts.
+//
+// LND's local balance leaves out outgoing HTLCs, and the commitment fee for their
+// outputs too when we opened the channel (measured: a 20,000 sat HTLC took 20,430
+// sat at 2,500 sat/kw). Each outgoing HTLC is listed with that cost.
 func spendable(channels []*lnrpc.Channel) (node.Spendable, error) {
-	const msatPerSat = 1000
 	var total node.Spendable
 	for _, channel := range channels {
 		if channel.LocalConstraints == nil {
@@ -176,8 +179,44 @@ func spendable(channels []*lnrpc.Channel) (node.Spendable, error) {
 		if channel.Active {
 			total.ActiveMsat += free
 		}
+		for _, htlc := range channel.PendingHtlcs {
+			if htlc.Incoming {
+				continue
+			}
+			total.Outgoing = append(total.Outgoing, node.HTLC{
+				Hash:       hex.EncodeToString(htlc.HashLock),
+				AmountMsat: htlc.Amount * msatPerSat,
+				CostMsat:   (htlc.Amount + htlcFeeSat(channel, htlc.Amount)) * msatPerSat,
+				Active:     channel.Active,
+			})
+		}
 	}
 	return total, nil
+}
+
+const (
+	msatPerSat = 1000
+	// htlcWeight is what one HTLC output adds to a commitment, in weight units
+	// (BOLT 3, and input.HTLCWeight in LND).
+	htlcWeight = 172
+)
+
+// htlcFeeSat is the commitment fee one outgoing HTLC takes from our balance. Only
+// the channel's opener pays commitment fees. Only anchor and taproot channels are
+// counted: their HTLC transactions pay no fee, so an HTLC has an output exactly when
+// it is not below our dust limit. Older channel types give 0, which undercounts.
+// The fee is rounded down, so it can be 1 sat short of LND's, the safe side.
+func htlcFeeSat(channel *lnrpc.Channel, amountSat int64) int64 {
+	switch channel.CommitmentType {
+	case lnrpc.CommitmentType_ANCHORS, lnrpc.CommitmentType_SCRIPT_ENFORCED_LEASE, lnrpc.CommitmentType_SIMPLE_TAPROOT,
+		lnrpc.CommitmentType_SIMPLE_TAPROOT_OVERLAY, lnrpc.CommitmentType_SIMPLE_TAPROOT_FINAL:
+	default:
+		return 0
+	}
+	if !channel.Initiator || amountSat < int64(channel.LocalConstraints.DustLimitSat) {
+		return 0
+	}
+	return htlcWeight * channel.FeePerKw / 1000
 }
 
 // MakeInvoice implements node.Node.

@@ -187,3 +187,70 @@ func migrationFiles(dir fs.FS) ([]string, error) {
 	}
 	return files, nil
 }
+
+// Backup writes a copy of the database at path to a new file at dest, with VACUUM
+// INTO. It works while the service runs and writes, because it reads one snapshot, so
+// it needs no lock. It runs no migrations, so it never changes the live database.
+//
+// The file is created empty with FileMode first, because VACUUM INTO alone gives
+// one that other users can read, and it holds the wallet service keys. An existing
+// file is refused and left alone. After a failure, the new file is removed.
+func Backup(ctx context.Context, path, dest string) (err error) {
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+	dest, err = filepath.Abs(dest)
+	if err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+	file, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, FileMode)
+	if err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return errors.Join(fmt.Errorf("backup: %w", err), os.Remove(dest))
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, os.Remove(dest))
+		}
+	}()
+	dsn, err := dataSource(path)
+	if err != nil {
+		return err
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	var version int
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return fmt.Errorf("backup: read schema version: %w", err)
+	}
+	if version == 0 {
+		return fmt.Errorf("backup: %s is not an nwc4ln database", path)
+	}
+	if _, err := db.ExecContext(ctx, "VACUUM INTO ?", dest); err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+	return syncFile(dest)
+}
+
+// syncFile makes a new file and its folder entry survive a power cut.
+func syncFile(path string) error {
+	for _, name := range []string{path, filepath.Dir(path)} {
+		file, err := os.Open(name)
+		if err != nil {
+			return fmt.Errorf("backup: %w", err)
+		}
+		err = file.Sync()
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return fmt.Errorf("backup: sync %s: %w", name, err)
+		}
+	}
+	return nil
+}

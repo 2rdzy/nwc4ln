@@ -49,8 +49,13 @@ func (b *book) check(step int, what string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spendable.ActiveMsat != b.node {
-		t.Fatalf("step %d, %s: node has %d, want %d", step, what, spendable.ActiveMsat, b.node)
+	// A payment in flight has already left the node's figure, as on LND.
+	flying := int64(0)
+	for _, f := range b.flying {
+		flying += f.amount + f.fee
+	}
+	if spendable.ActiveMsat != b.node-flying {
+		t.Fatalf("step %d, %s: node has %d, want %d less %d in flight", step, what, spendable.ActiveMsat, b.node, flying)
 	}
 	if sum != b.node {
 		t.Fatalf("step %d, %s: accounts, holds and main add up to %d, node has %d", step, what, sum, b.node)

@@ -152,7 +152,7 @@ func TestGetBalance(t *testing.T) {
 	if got := balance(); got != float64(390*sat) { // 100 sat plus the 10 sat reserve.
 		t.Fatalf("with a hold: got %v", got)
 	}
-	e.node.SetSpendable(node.Spendable{ActiveMsat: 50 * sat})
+	e.node.SetSpendable(node.Spendable{}) // The 100 sat in flight is added back, less its 110 sat hold.
 	if got := balance(); got != float64(0) {
 		t.Fatalf("below 0: got %v", got)
 	}

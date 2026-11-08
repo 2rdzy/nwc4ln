@@ -23,7 +23,7 @@ import (
 const (
 	databaseName = "nwc4ln.db"
 	dataDirMode  = 0o700
-	usage        = "usage: nwc4ln <init|start|app add --name name [--invoice]> [--config path]"
+	usage        = "usage: nwc4ln <init|start|app add --name name [--invoice]> [--config path], or nwc4ln backup [--config path] <file>"
 )
 
 func main() {
@@ -55,7 +55,11 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	if err := flags.Parse(rest); err != nil {
 		return err
 	}
-	if flags.NArg() > 0 {
+	wantArgs := 0
+	if command == "backup" {
+		wantArgs = 1 // The file to write.
+	}
+	if flags.NArg() != wantArgs {
 		return errors.New(usage)
 	}
 	if *configPath == "" {
@@ -76,6 +80,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return runStart(ctx, path, out)
 	case "app add":
 		return runAppAdd(ctx, path, *name, *canInvoice, out)
+	case "backup":
+		return runBackup(ctx, path, flags.Arg(0), out)
 	default:
 		return errors.New(usage)
 	}
@@ -182,5 +188,19 @@ func runAppAdd(ctx context.Context, configPath, name string, canInvoice bool, ou
 		return err
 	}
 	fmt.Fprintln(out, connectionString)
+	return nil
+}
+
+// runBackup writes a copy of the database to a new file. It takes no lock, so it works
+// while the service runs.
+func runBackup(ctx context.Context, configPath, dest string, out io.Writer) error {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	if err := store.Backup(ctx, filepath.Join(cfg.DataDir, databaseName), dest); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "backup written to", dest)
 	return nil
 }

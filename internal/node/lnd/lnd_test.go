@@ -66,6 +66,54 @@ func TestSpendableClampsEachChannel(t *testing.T) {
 	}
 }
 
+// Catches: an outgoing HTLC listed at a cost other than what LND took from the local
+// balance, an incoming one listed, or a commitment fee counted for a channel we did not
+// open, an older channel type, or a dust HTLC. The integration test checks the anchor
+// case on a real node; the other cases do not occur in the harness.
+func TestSpendableListsOutgoingHTLCs(t *testing.T) {
+	hash := []byte{0xab, 0xcd}
+	with := func(initiator bool, kind lnrpc.CommitmentType, htlcs ...*lnrpc.HTLC) *lnrpc.Channel {
+		c := channel(true, 50_000, 1_000, 0, 0)
+		c.Initiator, c.CommitmentType, c.FeePerKw, c.PendingHtlcs = initiator, kind, 2_500, htlcs
+		c.LocalConstraints.DustLimitSat = 354
+		return c
+	}
+	inactive := func(c *lnrpc.Channel) *lnrpc.Channel { c.Active = false; return c }
+	out := func(sats int64) *lnrpc.HTLC { return &lnrpc.HTLC{Amount: sats, HashLock: hash} }
+	cases := []struct {
+		name     string
+		channel  *lnrpc.Channel
+		wantCost []int64
+	}{
+		{"AnchorWeOpened", with(true, lnrpc.CommitmentType_ANCHORS, out(20_000)), []int64{20_430_000}},
+		{"TaprootWeOpened", with(true, lnrpc.CommitmentType_SIMPLE_TAPROOT, out(20_000)), []int64{20_430_000}},
+		{"PeerOpened", with(false, lnrpc.CommitmentType_ANCHORS, out(20_000)), []int64{20_000_000}},
+		{"Legacy", with(true, lnrpc.CommitmentType_STATIC_REMOTE_KEY, out(20_000)), []int64{20_000_000}},
+		{"Dust", with(true, lnrpc.CommitmentType_ANCHORS, out(353)), []int64{353_000}},
+		{"AtDustLimit", with(true, lnrpc.CommitmentType_ANCHORS, out(354)), []int64{784_000}},
+		{"IncomingLeftOut", with(true, lnrpc.CommitmentType_ANCHORS, &lnrpc.HTLC{Incoming: true, Amount: 5_000}), nil},
+		{"EachPart", with(true, lnrpc.CommitmentType_ANCHORS, out(1_000), out(2_000)), []int64{1_430_000, 2_430_000}},
+		{"Inactive", inactive(with(true, lnrpc.CommitmentType_ANCHORS, out(20_000))), []int64{20_430_000}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := spendable([]*lnrpc.Channel{c.channel})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.AllMsat != 49_000_000 || len(got.Outgoing) != len(c.wantCost) {
+				t.Fatalf("got %+v", got)
+			}
+			for i, htlc := range got.Outgoing {
+				if htlc.CostMsat != c.wantCost[i] || htlc.Hash != "abcd" || htlc.Active != c.channel.Active ||
+					htlc.AmountMsat != c.channel.PendingHtlcs[i].Amount*1000 {
+					t.Errorf("HTLC %d: %+v, want cost %d", i, htlc, c.wantCost[i])
+				}
+			}
+		})
+	}
+}
+
 // Catches: a reserve read as 0 when LND leaves the constraints out.
 func TestSpendableRefusesMissingConstraints(t *testing.T) {
 	if _, err := spendable([]*lnrpc.Channel{{Active: true, LocalBalance: 1}}); err == nil {

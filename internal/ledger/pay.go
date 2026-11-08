@@ -156,7 +156,7 @@ func (l *Ledger) hold(
 		}
 		reserve = Reserve(amount)
 	}
-	err = l.checkFunds(ctx, tx, request.AccountID, subWallet, settings, spendable.ActiveMsat, amount+reserve)
+	err = l.checkFunds(ctx, tx, request.AccountID, subWallet, settings, spendable, amount+reserve)
 	if err != nil {
 		return Transaction{}, err
 	}
