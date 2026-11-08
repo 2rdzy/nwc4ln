@@ -11,11 +11,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/2rdzy/nwc4ln/internal/config"
+	"github.com/2rdzy/nwc4ln/internal/ledger"
 	"github.com/2rdzy/nwc4ln/internal/node/lnd"
 	"github.com/2rdzy/nwc4ln/internal/nwc"
 	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
@@ -34,7 +34,7 @@ const (
 type service struct {
 	t                *testing.T
 	dir, binary      string
-	config           string
+	config, relay    string
 	connectionString string
 	second           string // A second app's connection string.
 	adminSecret      string // The admin UI key.
@@ -81,7 +81,7 @@ func startService(t *testing.T, n *integration.Network) *service {
 	if err := config.Write(path, cfg); err != nil {
 		t.Fatal(err)
 	}
-	s := &service{t: t, dir: dir, binary: binary, config: path, adminSecret: adminSecret}
+	s := &service{t: t, dir: dir, binary: binary, config: path, relay: cfg.Relay, adminSecret: adminSecret}
 	s.connectionString = s.addApp("first")
 	s.second = s.addApp("second")
 	logFile, err := os.Create(filepath.Join(filepath.Dir(dir), "nwc4ln.log"))
@@ -105,14 +105,22 @@ func startService(t *testing.T, n *integration.Network) *service {
 	return s
 }
 
+// addApp creates an app while the service is stopped, with the function the
+// service itself uses. The admin UI is the only way to add one while it runs.
 func (s *service) addApp(name string) string {
 	s.t.Helper()
-	add := exec.CommandContext(s.t.Context(), s.binary, "app", "add", "--name", name, "--invoice", "--config", s.config)
-	stdout, err := add.Output()
+	db, err := store.Open(s.t.Context(), filepath.Join(s.dir, "nwc4ln.db"))
 	if err != nil {
-		s.t.Fatalf("app add: %v", err)
+		s.t.Fatal(err)
 	}
-	return strings.TrimSpace(string(stdout))
+	defer func() { _ = db.Close() }()
+	settings := ledger.DefaultApp()
+	settings.CanInvoice = true
+	connectionString, err := nwc.AddApp(s.t.Context(), db, name, s.relay, settings)
+	if err != nil {
+		s.t.Fatalf("add app: %v", err)
+	}
+	return connectionString
 }
 
 func (s *service) start() {

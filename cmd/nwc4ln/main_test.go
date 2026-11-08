@@ -115,7 +115,8 @@ func TestStartRefusesWhileRunning(t *testing.T) {
 }
 
 func TestUnknownCommandShowsUsage(t *testing.T) {
-	for _, args := range [][]string{nil, {"nonsense"}, {"init", "extra"}} {
+	// App changes go through the running service's UI, so "app add" is gone.
+	for _, args := range [][]string{nil, {"nonsense"}, {"init", "extra"}, {"app", "add", "--name", "shop"}} {
 		err := run(context.Background(), args, &bytes.Buffer{})
 		if err == nil || !strings.Contains(err.Error(), "usage") {
 			t.Errorf("args %v: got %v", args, err)
@@ -225,34 +226,6 @@ func TestStartRefusesBadRelay(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "relay") {
 			t.Errorf("relay %q: got %v", relay, err)
 		}
-	}
-}
-
-// Catches: data changed outside the running service.
-func TestAppAddRefusesWhileRunning(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "nwc4ln.toml")
-	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
-		t.Fatal(err)
-	}
-	writeServiceConfig(t, path, "ws://127.0.0.1:1")
-	release, err := store.Lock(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = run(t.Context(), []string{"app", "add", "--name", "shop", "--config", path}, io.Discard)
-	if !errors.Is(err, store.ErrLocked) {
-		t.Fatalf("while locked: %v", err)
-	}
-	if err := release(); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	if err := run(t.Context(), []string{"app", "add", "--name", "shop", "--config", path}, &out); err != nil {
-		t.Fatalf("after the lock is gone: %v", err)
-	}
-	if !strings.HasPrefix(out.String(), "nostr+walletconnect://") {
-		t.Fatalf("printed %q", out.String())
 	}
 }
 

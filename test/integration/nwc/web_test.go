@@ -5,9 +5,11 @@ package nwc_test
 import (
 	"encoding/base64"
 	"encoding/json"
+	"html"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -52,8 +54,10 @@ func get(t *testing.T, client *http.Client, url string) (*http.Response, string)
 }
 
 // Catches: the admin UI not wired into start, a login that fails against the real
-// process, or a dashboard that shows another main wallet figure than the one apps
-// are given by the same process on the real node.
+// process, a dashboard that shows another main wallet figure than the one apps are
+// given by the same process on the real node, and app changes in the UI that the
+// running service does not hear of: a new app not served, or a deleted one still
+// served.
 func TestAdminUI(t *testing.T) {
 	n, err := integration.Load(integration.DefaultConfig())
 	if err != nil {
@@ -133,4 +137,60 @@ func TestAdminUI(t *testing.T) {
 	if strings.Contains(page, `id="shortfall"`) || strings.Contains(page, `id="unknown"`) {
 		t.Fatalf("warning on a healthy node:\n%s", page)
 	}
+
+	t.Run("AppAddedAndDeleted", func(t *testing.T) {
+		response, page := postForm(t, client, base, "/apps", url.Values{
+			"name": {"from the UI"}, "renewal": {"never"}, "can_pay": {"on"},
+		})
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("create: %d\n%s", response.StatusCode, page)
+		}
+		match := regexp.MustCompile(`<textarea id="connection"[^>]*>([^<]+)<`).FindStringSubmatch(page)
+		if match == nil {
+			t.Fatalf("no connection string:\n%s", page)
+		}
+		added, err := nwctest.Parse(html.UnescapeString(match[1]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer added.Close()
+		waitForInfo(t, added)
+		if reply := call(t, added, nwctest.NIP44, "get_info"); reply.Error != nil {
+			t.Fatalf("get_info on the new app: %+v", reply.Error)
+		}
+
+		_, list := get(t, client, base+"/apps")
+		id := regexp.MustCompile(`<a href="/apps/(\d+)">from the UI</a>`).FindStringSubmatch(list)
+		if id == nil {
+			t.Fatalf("new app not listed:\n%s", list)
+		}
+		if response, _ := postForm(t, client, base, "/apps/"+id[1]+"/delete", nil); response.StatusCode != http.StatusSeeOther {
+			t.Fatalf("delete: %d", response.StatusCode)
+		}
+		// A revoked connection is told so, as with any other delete.
+		if reply := call(t, added, nwctest.NIP44, "get_info"); reply.Error == nil || reply.Error.Code != "UNAUTHORIZED" {
+			t.Fatalf("deleted app still served: %+v", reply.Error)
+		}
+	})
+}
+
+// postForm sends a form as the admin's browser would, with its origin.
+func postForm(t *testing.T, client *http.Client, base, path string, form url.Values) (*http.Response, string) {
+	t.Helper()
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+path, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Origin", base)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response, string(body)
 }

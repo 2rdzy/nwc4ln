@@ -1,8 +1,5 @@
 {{template "head" "nwc4ln: dashboard"}}
-<header>
-<nav><b>nwc4ln</b> <a href="/">Dashboard</a></nav>
-<form method="post" action="/logout"><button type="submit">Log out</button></form>
-</header>
+{{template "nav"}}
 <main>
 {{if not .Known}}
 <p class="warn" id="unknown"><b>The node cannot be read, so its figures are unknown.</b> Apps refuse to pay until it answers. Reload the page to try again.</p>

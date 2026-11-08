@@ -24,9 +24,12 @@ var templateFiles embed.FS
 //go:embed static
 var staticFiles embed.FS
 
-// Ledger gives the figures the UI shows.
+// Ledger gives the figures the UI shows. Only Overview reads the node.
 type Ledger interface {
 	Overview(ctx context.Context) (ledger.Overview, error)
+	Apps(ctx context.Context) ([]ledger.App, error)
+	AppBudget(ctx context.Context, accountID int64) (*ledger.Budget, error)
+	History(ctx context.Context, query ledger.HistoryQuery) ([]ledger.Transaction, int64, error)
 }
 
 // Config sets up the server.
@@ -36,6 +39,7 @@ type Config struct {
 	// AllowedHosts are extra host names to answer to, besides the loopback names.
 	AllowedHosts []string
 	Ledger       Ledger
+	Apps         AppService
 	Log          *slog.Logger
 }
 
@@ -44,6 +48,7 @@ type Server struct {
 	adminKey string
 	hosts    map[string]bool
 	ledger   Ledger
+	apps     AppService
 	log      *slog.Logger
 	pages    *template.Template
 	handler  http.Handler
@@ -58,12 +63,14 @@ type Server struct {
 
 // New returns the admin UI.
 func New(cfg Config) (*Server, error) {
-	pages, err := template.New("").Funcs(template.FuncMap{"sats": formatSats}).ParseFS(templateFiles, "templates/*.html")
+	pages, err := template.New("").Funcs(template.FuncMap{
+		"sats": formatSats, "msat": formatMsat, "time": formatTime,
+	}).ParseFS(templateFiles, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
 	s := &Server{
-		adminKey: cfg.AdminKey, ledger: cfg.Ledger, log: cfg.Log, pages: pages, now: time.Now,
+		adminKey: cfg.AdminKey, ledger: cfg.Ledger, apps: cfg.Apps, log: cfg.Log, pages: pages, now: time.Now,
 		hosts:      map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true},
 		challenges: map[string]time.Time{}, sessions: map[string]time.Time{},
 	}
@@ -76,6 +83,13 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("POST /logout", s.logout)
 	mux.Handle("GET /static/", http.FileServerFS(staticFiles))
 	mux.HandleFunc("GET /{$}", s.dashboard)
+	mux.HandleFunc("GET /apps", s.appsPage)
+	mux.HandleFunc("GET /apps/new", s.newAppPage)
+	mux.HandleFunc("POST /apps", s.createApp)
+	mux.HandleFunc("GET /apps/{id}", s.appPage)
+	mux.HandleFunc("POST /apps/{id}", s.editApp)
+	mux.HandleFunc("GET /apps/{id}/delete", s.deleteAppPage)
+	mux.HandleFunc("POST /apps/{id}/delete", s.deleteApp)
 	s.handler = s.guard(mux)
 	return s, nil
 }

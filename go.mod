@@ -6,6 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/getAlby/go-nostr v0.0.0-20261104074428-45060cc10054
 	github.com/lightningnetwork/lnd v0.21.6-beta
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/time v0.3.0
 	google.golang.org/grpc v1.83.1
 	modernc.org/sqlite v1.61.1

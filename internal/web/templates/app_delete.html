@@ -1,0 +1,10 @@
+{{template "head" "nwc4ln: delete an app"}}
+{{template "nav"}}
+<main>
+<h1>Delete {{.Name}}?</h1>
+<p>Its connection stops working at once. Payments already pending finish. The history is kept.</p>
+<form method="post" action="/apps/{{.ID}}/delete">
+<p><button type="submit">Delete the app</button> <a href="/apps/{{.ID}}">Cancel</a></p>
+</form>
+</main>
+{{template "foot"}}

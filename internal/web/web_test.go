@@ -27,6 +27,14 @@ type stubLedger struct {
 }
 
 func (s *stubLedger) Overview(context.Context) (ledger.Overview, error) { return s.overview, s.err }
+func (s *stubLedger) Apps(context.Context) ([]ledger.App, error)        { return nil, nil }
+func (s *stubLedger) AppBudget(context.Context, int64) (*ledger.Budget, error) {
+	return nil, nil
+}
+
+func (s *stubLedger) History(context.Context, ledger.HistoryQuery) ([]ledger.Transaction, int64, error) {
+	return nil, 0, nil
+}
 
 type env struct {
 	t      *testing.T
@@ -37,11 +45,16 @@ type env struct {
 
 func newEnv(t *testing.T, l Ledger) *env {
 	t.Helper()
+	return newEnvWith(t, Config{Ledger: l, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+}
+
+// newEnvWith sets the admin key and allowed hosts on the config, and starts the
+// clock at a fixed time.
+func newEnvWith(t *testing.T, cfg Config) *env {
+	t.Helper()
 	secret, public := nwctest.NewKey()
-	server, err := New(Config{
-		AdminKey: public, AllowedHosts: []string{"nwc.example"}, Ledger: l,
-		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-	})
+	cfg.AdminKey, cfg.AllowedHosts = public, []string{"nwc.example"}
+	server, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,6 +305,13 @@ var routes = []struct {
 	{http.MethodGet, "/", false},
 	{http.MethodPost, "/logout", false},
 	{http.MethodGet, "/nothing-here", false},
+	{http.MethodGet, "/apps", false},
+	{http.MethodGet, "/apps/new", false},
+	{http.MethodPost, "/apps", false},
+	{http.MethodGet, "/apps/1", false},
+	{http.MethodPost, "/apps/1", false},
+	{http.MethodGet, "/apps/1/delete", false},
+	{http.MethodPost, "/apps/1/delete", false},
 	{http.MethodGet, "/login", true},
 	{http.MethodGet, "/static/style.css", true},
 	{http.MethodGet, "/static/login.js", true},

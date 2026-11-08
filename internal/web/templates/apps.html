@@ -1,0 +1,21 @@
+{{template "head" "nwc4ln: apps"}}
+{{template "nav"}}
+<main>
+<h1>Apps</h1>
+<p>An app spends from the main wallet, with an optional limit. <a href="/apps/new" id="new">Add an app</a></p>
+{{if .Apps}}
+<table id="apps">
+<tr><th>Name</th><th>Last used</th><th class="n">Limit left</th></tr>
+{{range .Apps}}
+<tr>
+<td><a href="/apps/{{.ID}}">{{.Name}}</a>{{if .Expired $.Now}} <span class="small">(expired)</span>{{end}}</td>
+<td>{{if .LastUsedAt.IsZero}}never{{else}}{{time .LastUsedAt}}{{end}}</td>
+<td class="n" id="left-{{.ID}}">{{if .HasLimit}}{{sats .Left}}{{if .OverLimit}} <span class="small">(used above limit)</span>{{end}}{{else}}no limit{{end}}</td>
+</tr>
+{{end}}
+</table>
+{{else}}
+<p id="none">No apps yet.</p>
+{{end}}
+</main>
+{{template "foot"}}
