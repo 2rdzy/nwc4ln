@@ -190,7 +190,7 @@ func TestAppPageShowsPendingRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := e.get(fmt.Sprintf("/apps/%d", id))
-	if !strings.Contains(page, "<td>incoming</td><td>pending</td><td class=\"n\">21.5 sat</td>") ||
+	if !strings.Contains(page, `<td>incoming</td><td><span class="pill pending">pending</span></td><td class="n">21.5 sat</td>`) ||
 		!strings.Contains(page, "coffee &lt;b&gt;") {
 		t.Fatalf("pending invoice missing or not escaped:\n%s", page)
 	}

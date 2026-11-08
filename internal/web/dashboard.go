@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -14,6 +15,10 @@ type dashboardData struct {
 	Known    bool // False if the node could not be read.
 	Overview ledger.Overview
 	ReadAt   string
+	// Counted is false if the database could not list apps and sub-wallets.
+	Counted     bool
+	AppCount    int
+	WalletCount int
 }
 
 // Figures in sats, rounded so that rounding never hides a shortfall: what the node
@@ -25,12 +30,21 @@ func (d dashboardData) MainAvailable() int64 { return floorSats(d.Overview.MainA
 func (d dashboardData) Shortfall() int64     { return ceilSats(d.Overview.ShortfallMsat) }
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
-	data := dashboardData{ReadAt: s.now().UTC().Format(time.DateTime + " UTC")}
+	now := s.now()
+	data := dashboardData{ReadAt: now.UTC().Format(time.DateTime + " UTC")}
 	overview, err := s.ledger.Overview(r.Context())
 	if err != nil {
 		s.log.Warn("dashboard: node figures unknown", "error", err)
 	} else {
 		data.Known, data.Overview = true, overview
+	}
+	s.noteRead(now, err == nil)
+	apps, appsErr := s.ledger.Apps(r.Context())
+	wallets, walletsErr := s.ledger.SubWallets(r.Context())
+	if err := errors.Join(appsErr, walletsErr); err != nil {
+		s.log.Warn("dashboard: counts unknown", "error", err)
+	} else {
+		data.Counted, data.AppCount, data.WalletCount = true, len(apps), len(wallets)
 	}
 	s.render(w, "dashboard.html", data)
 }

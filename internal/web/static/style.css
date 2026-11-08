@@ -1,15 +1,396 @@
-body { font-family: system-ui, sans-serif; margin: 0; background: #fafafa; color: #222; }
-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 24px; background: #222; color: #fff; }
-header a { color: #ddd; margin-left: 24px; text-decoration: none; }
-header form { margin: 0; }
-main, footer { max-width: 760px; margin: 24px auto; padding: 0 16px; }
-footer { color: #666; font-size: 13px; }
-.warn { border-left: 4px solid #c00; background: #fee; padding: 12px 16px; }
-.note { border-left: 4px solid #b80; background: #fff8e0; padding: 12px 16px; }
-.error { color: #c00; }
-.small { color: #666; font-size: 13px; }
-table { width: 100%; border-collapse: collapse; background: #fff; }
-td, th { padding: 10px 12px; border-bottom: 1px solid #eee; text-align: left; font-weight: normal; }
-th { font-weight: bold; }
-td.n { text-align: right; font-variant-numeric: tabular-nums; }
-button { padding: 8px 16px; }
+/* nwc4ln admin UI. Plain CSS, no build step. The page's security policy blocks
+   inline styles, so every style lives here. Colours are tokens: the reds come
+   from the BLAKE2b explorer theme. */
+
+:root {
+  --red-900: #6E2216;
+  --red-800: #822A1C;
+  --red-700: #9C3321;
+  --red-600: #C4402A;
+  --red-400: #EA8774;
+  --red-300: #F2A493;
+
+  --bg: #FAF7F6;
+  --side: #FFFFFF;
+  --surface: #FFFFFF;
+  --border: #EBE1DE;
+  --input-border: #D9CBC7;
+  --text: #1F1715;
+  --muted: #6B5D5A;
+  --link: var(--red-700);
+  --link-hover: var(--red-800);
+  --primary: var(--red-700);
+  --primary-hover: var(--red-800);
+  --active-bg: #FBEAE6;
+  --active-text: var(--red-800);
+  --focus: var(--red-600);
+
+  --ok-bg: #E3F4EA;
+  --ok-text: #17663F;
+  --ok-dot: #1F8A55;
+  --pend-bg: #FFF1D6;
+  --pend-text: #7A4F00;
+  --fail-bg: #EFEAE9;
+  --fail-text: #5A4E4B;
+  --warn-bg: #FFF6E0;
+  --warn-border: #F0D48A;
+  --warn-text: #5C3D00;
+  --danger-border: var(--red-600);
+  --danger-text: var(--red-700);
+
+  /* The lightest red is only a glow in the top right corner, away from the
+     text: white on it is 2.6:1. Under the text the gradient stays at 5:1 or more. */
+  --hero: radial-gradient(circle at 100% 0%, rgba(234, 135, 116, 0.5), transparent 40%),
+    linear-gradient(120deg, var(--red-900) 0%, var(--red-700) 45%, var(--red-600) 100%);
+
+  --radius-s: 10px;
+  --radius-m: 16px;
+  --radius-l: 20px;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141010;
+    --side: #1A1413;
+    --surface: #211A19;
+    --border: #3A2E2C;
+    --input-border: #4A3B38;
+    --text: #F3EBE9;
+    --muted: #B5A6A3;
+    --link: var(--red-300);
+    --link-hover: #F8C4B8;
+    --primary: #B33A26;
+    --primary-hover: var(--red-600);
+    --active-bg: #3A1C17;
+    --active-text: var(--red-300);
+    --focus: var(--red-400);
+
+    --ok-bg: #15301F;
+    --ok-text: #7FD9A4;
+    --ok-dot: #3DBE7B;
+    --pend-bg: #33270F;
+    --pend-text: #F2C76B;
+    --fail-bg: #2C2423;
+    --fail-text: #C9BAB7;
+    --warn-bg: #2E2410;
+    --warn-border: #6B5220;
+    --warn-text: #F5D78A;
+    --danger-border: var(--red-400);
+    --danger-text: var(--red-300);
+  }
+}
+
+/* Base */
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+}
+a { color: var(--link); }
+a:hover { color: var(--link-hover); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+h1 { margin: 0 0 4px; font-size: 30px; line-height: 1.2; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+h2 { margin: 32px 0 12px; font-size: 18px; }
+p { margin: 0 0 12px; }
+code { font-size: 0.92em; padding: 1px 5px; border-radius: 6px; background: var(--active-bg); }
+
+/* Shell: the sidebar on the left, the page on the right. Without a sidebar, as on
+   the login page, the page is centred. */
+
+body:has(> .side) {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-rows: 1fr auto;
+}
+body:has(> .side) > .side { grid-row: 1 / span 2; }
+main, footer { width: 100%; max-width: 1040px; margin: 0 auto; padding: 40px 32px 0; }
+footer { padding-top: 24px; padding-bottom: 32px; font-size: 12px; color: var(--muted); }
+footer p { margin: 0 0 4px; }
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 24px 16px;
+  background: var(--side);
+  border-right: 1px solid var(--border);
+  height: 100vh;
+  position: sticky;
+  top: 0;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px;
+  color: var(--text);
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+.brand:hover { color: var(--text); }
+.mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-s);
+  background: linear-gradient(135deg, var(--red-800), var(--red-600) 60%, var(--red-400));
+  color: #FFFFFF;
+  flex: none;
+}
+.side nav { display: flex; flex-direction: column; gap: 4px; }
+.side nav a {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: var(--radius-s);
+  color: var(--text);
+  text-decoration: none;
+}
+.side nav a:hover { background: var(--bg); color: var(--text); }
+.side nav a.active { background: var(--active-bg); color: var(--active-text); font-weight: 600; }
+.side-end { margin-top: auto; display: flex; flex-direction: column; gap: 12px; }
+.side-end button { width: 100%; }
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 13px;
+}
+.status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.status.reachable .dot { background: var(--ok-dot); }
+.status.unreachable .dot { background: var(--red-600); }
+
+/* Phone width: the sidebar becomes a bar on top. */
+@media (max-width: 800px) {
+  body:has(> .side) { display: block; }
+  .side {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .side nav { flex-direction: row; flex-wrap: wrap; order: 3; width: 100%; }
+  .side nav a { padding: 0 10px; }
+  .side nav a svg { display: none; }
+  .side-end { margin: 0 0 0 auto; flex-direction: row; align-items: center; }
+  .side-end button { width: auto; }
+  main, footer { padding-left: 16px; padding-right: 16px; }
+  main { padding-top: 24px; }
+  h1 { font-size: 26px; }
+  .hero { padding: 24px; }
+  .hero .big { font-size: 34px; }
+}
+
+/* Page heading, with an action on the right. */
+.page-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.page-head h1 { margin: 0; }
+.page-head p { margin: 4px 0 0; }
+.crumb { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
+.crumb a { color: var(--muted); }
+
+/* Text */
+.small, .muted { color: var(--muted); }
+.small { font-size: 13px; }
+.error { color: var(--danger-text); }
+
+/* Cards */
+.card {
+  padding: 24px;
+  margin-bottom: 16px;
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.card > :last-child { margin-bottom: 0; }
+.card h2 { margin-top: 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.grid > .card { margin-bottom: 0; }
+.grid.three { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+
+/* The big figure on the dashboard and on a sub-wallet: the red gradient. */
+.hero {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 24px;
+  padding: 32px;
+  margin-bottom: 16px;
+  border-radius: var(--radius-l);
+  background: var(--hero);
+  color: #FFFFFF;
+}
+.hero p { margin: 0; }
+.hero .label { font-size: 14px; font-weight: 600; }
+.hero .big { font-size: 44px; line-height: 1.15; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.hero .hint { margin-top: 6px; font-size: 13px; }
+.hero .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.hero .btn { background: #FFFFFF; color: var(--red-800); border-color: #FFFFFF; }
+.hero .btn:hover { background: #FBEAE6; color: var(--red-900); }
+.hero .btn.secondary { background: rgba(80, 20, 12, 0.35); color: #FFFFFF; border-color: rgba(255, 255, 255, 0.6); }
+.hero .btn.secondary:hover { background: rgba(80, 20, 12, 0.5); }
+
+.stat p { margin: 0; }
+.stat .label { font-size: 13px; color: var(--muted); }
+.stat .value { margin: 4px 0; font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat .hint { font-size: 12px; color: var(--muted); }
+
+/* A whole card that is a link, such as the dashboard's Apps card. */
+a.tile { display: flex; align-items: center; gap: 16px; color: var(--text); text-decoration: none; }
+a.tile:hover { border-color: var(--input-border); color: var(--text); }
+.tile .icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--active-bg);
+  color: var(--active-text);
+  flex: none;
+}
+.tile .text { display: flex; flex-direction: column; flex: 1; }
+.tile .text b { font-size: 16px; }
+.tile .text span { font-size: 13px; color: var(--muted); }
+.tile .go { color: var(--muted); font-size: 22px; }
+
+/* Rows with an action on the right, as in Connection and Delete. */
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.row:first-child { padding-top: 0; }
+.row:last-child { padding-bottom: 0; border-bottom: 0; }
+.row h2 { margin: 0 0 2px; font-size: 16px; }
+.row p { margin: 0; }
+
+/* Alerts. Warnings are amber: red is the brand colour, so it does not mean
+   "error" here. */
+.warn, .note {
+  padding: 14px 18px;
+  margin-bottom: 16px;
+  border-radius: 14px;
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+.note { border-color: var(--border); background: var(--surface); color: var(--text); }
+.warn a, .note a { color: inherit; }
+
+/* Tables */
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+td, th { padding: 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+th {
+  padding-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+td:first-child, th:first-child { padding-left: 0; }
+td:last-child, th:last-child { padding-right: 0; }
+tr:last-child td { border-bottom: 0; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.card .scroll + p { margin-top: 12px; }
+/* A table of labels and values, as on an app's page. */
+table.facts td:first-child { color: var(--muted); width: 40%; }
+table.facts td:last-child { text-align: right; }
+table.facts th { text-transform: none; letter-spacing: 0; font-size: 14px; color: var(--text); padding-top: 12px; }
+
+.pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--fail-bg);
+  color: var(--fail-text);
+}
+.pill.settled { background: var(--ok-bg); color: var(--ok-text); }
+.pill.pending { background: var(--pend-bg); color: var(--pend-text); }
+
+/* Forms */
+form { margin: 0; }
+label { font-weight: 600; font-size: 13px; }
+input:not([type]), input[type="text"], input[type="date"], select, textarea {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 6px;
+  padding: 8px 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--input-border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 400;
+}
+textarea { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 13px; word-break: break-all; }
+input[type="checkbox"] { width: 18px; height: 18px; margin: 0 8px 0 0; vertical-align: -3px; accent-color: var(--primary); }
+.field { margin-bottom: 16px; max-width: 520px; }
+.field .small { display: block; margin-top: 6px; font-weight: 400; }
+.check { font-size: 15px; font-weight: 500; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 12px; }
+
+button, .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: #FFFFFF;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+button:hover, .btn:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: #FFFFFF; }
+button:disabled { opacity: 0.6; cursor: default; }
+button.ghost, .btn.ghost { background: transparent; border-color: var(--border); color: var(--text); }
+button.ghost:hover, .btn.ghost:hover { background: var(--bg); color: var(--text); border-color: var(--input-border); }
+/* Deleting: outlined, so it never looks like the usual action. */
+button.danger, .btn.danger { background: transparent; border-color: var(--danger-border); color: var(--danger-text); }
+button.danger:hover, .btn.danger:hover { background: var(--active-bg); color: var(--danger-text); border-color: var(--danger-border); }
+
+/* The QR code for a connection string. It draws its own white margin. */
+#qr { margin-bottom: 12px; }
+#qr svg { display: block; max-width: 100%; height: auto; border-radius: var(--radius-s); }
+
+/* Login: one card in the middle of the page. */
+main.login { max-width: 440px; padding-top: 12vh; }
+.login .brand { padding: 0; margin-bottom: 24px; }
+.login .card { padding: 32px; }
+.login button { width: 100%; }

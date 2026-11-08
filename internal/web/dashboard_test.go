@@ -77,6 +77,10 @@ func TestDashboardMatchesLedger(t *testing.T) {
 	show(map[string]string{"node": "600 sat", "subwallets": "890 sat", "holds": "110 sat", "main": "-400 sat"},
 		"shortfall", "negative")
 	page := body(t, e.do(http.MethodGet, "/", withCookie(cookie)))
+	// Catches: the dashboard's cards counting apps or sub-wallets wrongly.
+	if !strings.Contains(page, "<b>Apps</b><span>0 ·") || !strings.Contains(page, "<b>Sub-wallets</b><span>1 ·") {
+		t.Errorf("app and sub-wallet counts wrong:\n%s", page)
+	}
 	if !strings.Contains(page, "Shortfall: 400 sat.") {
 		t.Errorf("shortfall amount missing:\n%s", page)
 	}

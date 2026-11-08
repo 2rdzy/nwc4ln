@@ -44,10 +44,12 @@ type Config struct {
 	AdminKey string
 	// AllowedHosts are extra host names to answer to, besides the loopback names.
 	AllowedHosts []string
-	Ledger       Ledger
-	Apps         AppService
-	SubWallets   SubWalletService
-	Log          *slog.Logger
+	// NodeType is the node type from the config, "lnd" or "cln". The sidebar names it.
+	NodeType   string
+	Ledger     Ledger
+	Apps       AppService
+	SubWallets SubWalletService
+	Log        *slog.Logger
 }
 
 // Server is the admin UI.
@@ -60,6 +62,7 @@ type Server struct {
 	log      *slog.Logger
 	pages    *template.Template
 	handler  http.Handler
+	nodeName string // Shown in the sidebar, such as "LND".
 
 	now func() time.Time // Changed only by tests.
 
@@ -69,22 +72,26 @@ type Server struct {
 	sessions   map[string]time.Time // Session token to when it ends.
 	forms      map[string]formToken // Form token to what it allows.
 	formOrder  []string             // Form tokens, oldest first.
+	lastRead   time.Time            // When the dashboard last read the node. Zero: never.
+	lastReadOK bool                 // Whether that read answered.
 }
 
 // New returns the admin UI.
 func New(cfg Config) (*Server, error) {
-	pages, err := template.New("").Funcs(template.FuncMap{
-		"sats": formatSats, "msat": formatMsat, "time": formatTime,
-	}).ParseFS(templateFiles, "templates/*.html")
-	if err != nil {
-		return nil, err
-	}
 	s := &Server{
-		adminKey: cfg.AdminKey, ledger: cfg.Ledger, apps: cfg.Apps, wallets: cfg.SubWallets, log: cfg.Log, pages: pages,
+		adminKey: cfg.AdminKey, ledger: cfg.Ledger, apps: cfg.Apps, wallets: cfg.SubWallets, log: cfg.Log,
+		nodeName:   nodeName(cfg.NodeType),
 		now:        time.Now,
 		hosts:      map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true},
 		challenges: map[string]time.Time{}, sessions: map[string]time.Time{}, forms: map[string]formToken{},
 	}
+	pages, err := template.New("").Funcs(template.FuncMap{
+		"sats": formatSats, "msat": formatMsat, "time": formatTime, "node": s.nodeStatus,
+	}).ParseFS(templateFiles, "templates/*.html")
+	if err != nil {
+		return nil, err
+	}
+	s.pages = pages
 	for _, host := range cfg.AllowedHosts {
 		s.hosts[strings.ToLower(strings.Trim(host, "[]"))] = true
 	}

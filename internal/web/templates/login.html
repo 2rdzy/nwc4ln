@@ -1,14 +1,16 @@
 {{template "head" "nwc4ln: log in"}}
-<header><b>nwc4ln</b></header>
-<main>
+<main class="login">
+<p class="brand">{{template "mark"}}<span>nwc4ln</span></p>
+<section class="card">
 <h1>Log in</h1>
 {{if .NoAdmin}}
 <p class="warn">No admin key is set. Stop the service, run <code>nwc4ln set-admin &lt;npub&gt;</code>, and start it again.</p>
 {{else}}
-<p>Sign the login request with your Nostr browser extension (NIP-07). Only the admin key can log in.</p>
+<p class="muted">Sign the login request with your Nostr browser extension (NIP-07). Only the admin key can log in.</p>
 <button id="login" type="button" data-challenge="{{.Challenge}}">Log in with extension</button>
 <p id="message" class="error" role="status"></p>
 <script src="/static/login.js"></script>
 {{end}}
+</section>
 </main>
 {{template "foot"}}

@@ -1,12 +1,14 @@
 {{template "head" "nwc4ln: connection string"}}
-{{template "nav"}}
+{{template "nav" "subwallets"}}
 <main>
 <h1>{{.Title}}</h1>
 {{if .Replaced}}<p class="note" id="replaced">The old connection string has stopped working. The balance and history are unchanged.</p>{{end}}
-<p class="note"><b>This is the only time the connection string is shown.</b> nwc4ln keeps no copy of its secret. Give it to the holder now, or let them scan the code. Anyone with it can spend this sub-wallet's balance. Reloading this page {{if .Replaced}}replaces the string again, and this one stops working{{else}}adds another sub-wallet{{end}}.</p>
+<p class="warn"><b>This is the only time the connection string is shown.</b> nwc4ln keeps no copy of its secret. Give it to the holder now, or let them scan the code. Anyone with it can spend this sub-wallet's balance. Reloading this page {{if .Replaced}}replaces the string again, and this one stops working{{else}}adds another sub-wallet{{end}}.</p>
 <p class="note" id="custody">Sub-wallets are custodial. Their money stays on this node: you hold it, and you could take it. Tell each holder so. Someone who dislikes that can run their own node.</p>
+<section class="card">
 {{if .QR}}<div id="qr">{{.QR}}</div>{{end}}
 <p><textarea id="connection" readonly rows="5" cols="70">{{.ConnectionString}}</textarea></p>
-<p>{{if .Replaced}}<a href="/subwallets/{{.ID}}">Back to {{.Name}}</a>{{else}}<a href="/subwallets">Back to sub-wallets</a>{{end}}</p>
+<p>{{if .Replaced}}<a class="btn ghost" href="/subwallets/{{.ID}}">Back to {{.Name}}</a>{{else}}<a class="btn ghost" href="/subwallets">Back to sub-wallets</a>{{end}}</p>
+</section>
 </main>
 {{template "foot"}}
