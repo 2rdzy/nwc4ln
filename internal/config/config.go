@@ -16,7 +16,7 @@ import (
 // only the service user may read it.
 const FileMode = 0o600
 
-// Config holds the settings in the config file. Relay and LND settings are
+// Config holds the settings in the config file. Relay and node settings are
 // checked by the code that uses them.
 type Config struct {
 	DataDir         string `toml:"data_dir"`
@@ -25,6 +25,13 @@ type Config struct {
 	LNDHost         string `toml:"lnd_host"`
 	LNDTLSCertPath  string `toml:"lnd_tls_cert_path"`
 	LNDMacaroonPath string `toml:"lnd_macaroon_path"`
+	// Node is the node type, "lnd" or "cln". Empty means "lnd".
+	Node string `toml:"node,omitempty"`
+	// CLNURL is Core Lightning's clnrest address, such as https://127.0.0.1:3010.
+	CLNURL        string `toml:"cln_url,omitempty"`
+	CLNCACertPath string `toml:"cln_ca_cert_path,omitempty"`
+	// CLNRunePath is a file holding a rune limited to the methods nwc4ln uses.
+	CLNRunePath string `toml:"cln_rune_path,omitempty"`
 	// AllowedHosts are extra host names the admin UI answers to, such as a local
 	// proxy's name. localhost, 127.0.0.1 and ::1 are always allowed.
 	AllowedHosts []string `toml:"allowed_hosts,omitempty"`
@@ -81,7 +88,24 @@ func Write(path string, cfg Config) (err error) {
 	return nil
 }
 
+// Node types.
+const (
+	NodeLND = "lnd"
+	NodeCLN = "cln"
+)
+
+// NodeType gives the node type, with LND for an empty setting.
+func (c Config) NodeType() string {
+	if c.Node == "" {
+		return NodeLND
+	}
+	return c.Node
+}
+
 func (c Config) validate() error {
+	if t := c.NodeType(); t != NodeLND && t != NodeCLN {
+		return fmt.Errorf("node must be %q or %q, got %q", NodeLND, NodeCLN, c.Node)
+	}
 	if c.DataDir == "" {
 		return errors.New("data_dir is required")
 	}

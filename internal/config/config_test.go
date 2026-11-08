@@ -32,6 +32,7 @@ func TestLoadRefusesBadConfig(t *testing.T) {
 		{"every interface", "data_dir='/d'\nlisten=':8080'", "loopback"},
 		{"public address", "data_dir='/d'\nlisten='192.168.1.2:8080'", "loopback"},
 		{"host name", "data_dir='/d'\nlisten='example.com:8080'", "loopback"},
+		{"unknown node type", "data_dir='/d'\nlisten='127.0.0.1:1'\nnode='eclair'", "node must be"},
 		{"allowed host with port", "data_dir='/d'\nlisten='127.0.0.1:1'\nallowed_hosts=['a.example:80']", "without a port"},
 	}
 	for _, test := range tests {
@@ -56,6 +57,8 @@ func TestWriteThenLoad(t *testing.T) {
 	want := Default("/data/with \"quotes\"")
 	want.Relay = "ws://127.0.0.1:1"
 	want.AllowedHosts = []string{"nwc.example"}
+	want.Node = NodeCLN
+	want.CLNURL, want.CLNCACertPath, want.CLNRunePath = "https://127.0.0.1:3010", "/cln/ca.pem", "/cln/rune"
 	if err := Write(path, want); err != nil {
 		t.Fatal(err)
 	}
@@ -80,5 +83,17 @@ func TestWriteRefusesExistingFile(t *testing.T) {
 	}
 	if string(got) != "keep me" {
 		t.Fatalf("file changed to %q", got)
+	}
+}
+
+// A failure here means a config file from before Core Lightning support starts
+// some other client than LND.
+func TestNodeTypeDefaultsToLND(t *testing.T) {
+	cfg, err := Load(writeFile(t, "data_dir='/d'\nlisten='127.0.0.1:1'"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NodeType() != NodeLND {
+		t.Fatalf("node type %q, want %q", cfg.NodeType(), NodeLND)
 	}
 }

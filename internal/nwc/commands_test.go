@@ -3,6 +3,7 @@ package nwc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -627,5 +628,15 @@ func TestFullQueueDoesNotBlock(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Notify blocked")
+	}
+}
+
+// Catches: a node that cannot make an invoice from a bare description hash (Core
+// Lightning) giving INTERNAL, which reads as a bug, rather than OTHER with a reason.
+func TestNeedsDescriptionIsOther(t *testing.T) {
+	s := &Service{}
+	failed := s.refused("make_invoice", fmt.Errorf("make invoice: cln: %w", node.ErrNeedsDescription))
+	if failed.Code != codeOther || !strings.Contains(failed.Message, "description_hash") {
+		t.Fatalf("got %+v", failed)
 	}
 }

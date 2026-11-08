@@ -16,6 +16,8 @@ import (
 
 	"github.com/2rdzy/nwc4ln/internal/config"
 	"github.com/2rdzy/nwc4ln/internal/ledger"
+	"github.com/2rdzy/nwc4ln/internal/node"
+	"github.com/2rdzy/nwc4ln/internal/node/cln"
 	"github.com/2rdzy/nwc4ln/internal/node/lnd"
 	"github.com/2rdzy/nwc4ln/internal/nwc"
 	"github.com/2rdzy/nwc4ln/internal/store"
@@ -135,6 +137,20 @@ func runInit(ctx context.Context, configPath, adminNpub string, out io.Writer) e
 // the relay only after the ledger has recovered, so that no request is answered
 // before that. It refuses to run on a node that is not the ledger's. The admin UI
 // starts first, so the admin can see the figures are unknown while the node is down.
+// nodeClient is a node with a connection to close.
+type nodeClient interface {
+	node.Node
+	Close() error
+}
+
+// newNode makes the client for the node type in the config.
+func newNode(cfg config.Config) (nodeClient, error) {
+	if cfg.NodeType() == config.NodeCLN {
+		return cln.New(cln.Config{URL: cfg.CLNURL, CACertPath: cfg.CLNCACertPath, RunePath: cfg.CLNRunePath})
+	}
+	return lnd.New(lnd.Config{Host: cfg.LNDHost, TLSCertPath: cfg.LNDTLSCertPath, MacaroonPath: cfg.LNDMacaroonPath})
+}
+
 func runStart(ctx context.Context, configPath string, out io.Writer) (err error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -157,7 +173,7 @@ func runStart(ctx context.Context, configPath string, out io.Writer) (err error)
 	if err != nil {
 		return err
 	}
-	client, err := lnd.New(lnd.Config{Host: cfg.LNDHost, TLSCertPath: cfg.LNDTLSCertPath, MacaroonPath: cfg.LNDMacaroonPath})
+	client, err := newNode(cfg)
 	if err != nil {
 		return err
 	}

@@ -15,9 +15,12 @@ import (
 	"github.com/2rdzy/nwc4ln/test/integration"
 )
 
-// heldHTLCs counts lnd-a's outgoing HTLCs for a hash.
+// heldHTLCs counts the node's outgoing HTLCs for a hash.
 func heldHTLCs(t *testing.T, n *integration.Network, hash string) int {
 	t.Helper()
+	if integration.IsCLN(self) {
+		return clnHeldHTLCs(t, n, hash)
+	}
 	out, err := n.LNCLI(t.Context(), self, "listchannels")
 	if err != nil {
 		t.Fatalf("listchannels: %v: %s", err, out)
@@ -44,6 +47,26 @@ func heldHTLCs(t *testing.T, n *integration.Network, hash string) int {
 	return count
 }
 
+// steadyAvailable reads the main wallet once the node's figure has stopped moving.
+// The payments waitReady makes can still be settling into the channel balance after
+// they return: on Core Lightning a figure read then rose by 1 sat a moment later.
+func steadyAvailable(t *testing.T, money *ledger.Ledger) int64 {
+	t.Helper()
+	last := int64(-1)
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {
+		got, err := money.MainAvailable(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got == last {
+			return got
+		}
+		last = got
+	}
+	t.Fatal("the node's figure kept moving")
+	return 0
+}
+
 func shortfall(t *testing.T, money *ledger.Ledger) int64 {
 	t.Helper()
 	got, err := money.Shortfall(t.Context())
@@ -64,7 +87,7 @@ func TestInFlightRaisesNoShortfall(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	if err := n.WaitChannels(ctx); err != nil {
+	if err := waitReady(ctx, n); err != nil {
 		t.Fatal(err)
 	}
 	money, service := inProcess(t, ctx, n)
@@ -76,10 +99,7 @@ func TestInFlightRaisesNoShortfall(t *testing.T) {
 		t.Fatalf("sub-wallets %+v, %v", wallets, err)
 	}
 	wallet := wallets[0].ID
-	available, err := money.MainAvailable(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	available := steadyAvailable(t, money)
 	if row, err := money.Fund(ctx, wallet, available); err != nil || row.State != ledger.StateSettled {
 		t.Fatalf("fund %+v, %v", row, err)
 	}

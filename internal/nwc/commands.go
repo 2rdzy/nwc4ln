@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/2rdzy/nwc4ln/internal/ledger"
+	"github.com/2rdzy/nwc4ln/internal/node"
 )
 
 const (
@@ -85,7 +86,7 @@ type getInfoResult struct {
 	PubKey        string   `json:"pubkey"`
 	Network       string   `json:"network"`
 	BlockHeight   uint32   `json:"block_height"`
-	BlockHash     string   `json:"block_hash"`
+	BlockHash     string   `json:"block_hash,omitempty"`
 	Methods       []string `json:"methods"`
 	Extensions    []string `json:"extensions"`
 	Notifications []string `json:"notifications"`
@@ -208,6 +209,8 @@ func (s *Service) refused(command string, err error) *Error {
 		message = "this invoice is from this node, and nwc4ln did not make it"
 	case errors.Is(err, ledger.ErrBadAmount):
 		message = "bad amount"
+	case errors.Is(err, node.ErrNeedsDescription):
+		message = "this node needs the description that description_hash covers"
 	default:
 		s.log.Error("command failed", "command", command, "error", err)
 		return &Error{Code: codeInternal, Message: "the request could not be done"}

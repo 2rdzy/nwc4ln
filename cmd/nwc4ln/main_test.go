@@ -229,6 +229,37 @@ func TestStartRefusesBadRelay(t *testing.T) {
 	}
 }
 
+// Catches: start using the LND client, or no client, when the config names Core
+// Lightning. The rune file may not be readable by others, and start must say so.
+func TestStartUsesTheConfiguredNode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nwc4ln.toml")
+	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	writeServiceConfig(t, path, "ws://127.0.0.1:1")
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runePath := filepath.Join(filepath.Dir(path), "rune")
+	if err := os.WriteFile(runePath, []byte("r"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Node, cfg.CLNURL, cfg.CLNCACertPath, cfg.CLNRunePath = config.NodeCLN, "https://127.0.0.1:1", path, runePath
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Write(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	err = run(ctx, []string{"start", "--config", path}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "cln: rune file") {
+		t.Fatalf("got %v, want the Core Lightning client's rune check", err)
+	}
+}
+
 // Catches: a backup that refuses, or waits, while the service holds the data folder.
 func TestBackupWhileRunning(t *testing.T) {
 	dir := t.TempDir()
