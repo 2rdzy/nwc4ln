@@ -36,6 +36,21 @@ func (s *stubLedger) History(context.Context, ledger.HistoryQuery) ([]ledger.Tra
 	return nil, 0, nil
 }
 
+func (s *stubLedger) SubWallets(context.Context) ([]ledger.SubWallet, error) { return nil, nil }
+func (s *stubLedger) Accounts(context.Context) ([]ledger.Account, error)     { return nil, nil }
+
+func (s *stubLedger) AllHistory(context.Context, ledger.AllHistoryQuery) ([]ledger.Transaction, int64, error) {
+	return nil, 0, nil
+}
+
+func (s *stubLedger) Fund(context.Context, int64, int64) (ledger.Transaction, error) {
+	return ledger.Transaction{}, errors.New("stub moves nothing")
+}
+
+func (s *stubLedger) Withdraw(context.Context, int64, int64) (ledger.Transaction, error) {
+	return ledger.Transaction{}, errors.New("stub moves nothing")
+}
+
 type env struct {
 	t      *testing.T
 	server *Server
@@ -312,6 +327,17 @@ var routes = []struct {
 	{http.MethodPost, "/apps/1", false},
 	{http.MethodGet, "/apps/1/delete", false},
 	{http.MethodPost, "/apps/1/delete", false},
+	{http.MethodGet, "/subwallets", false},
+	{http.MethodGet, "/subwallets/new", false},
+	{http.MethodPost, "/subwallets", false},
+	{http.MethodGet, "/subwallets/1", false},
+	{http.MethodPost, "/subwallets/1/fund", false},
+	{http.MethodPost, "/subwallets/1/withdraw", false},
+	{http.MethodGet, "/subwallets/1/replace", false},
+	{http.MethodPost, "/subwallets/1/replace", false},
+	{http.MethodGet, "/subwallets/1/delete", false},
+	{http.MethodPost, "/subwallets/1/delete", false},
+	{http.MethodGet, "/transactions", false},
 	{http.MethodGet, "/login", true},
 	{http.MethodGet, "/static/style.css", true},
 	{http.MethodGet, "/static/login.js", true},

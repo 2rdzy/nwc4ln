@@ -30,6 +30,12 @@ type Ledger interface {
 	Apps(ctx context.Context) ([]ledger.App, error)
 	AppBudget(ctx context.Context, accountID int64) (*ledger.Budget, error)
 	History(ctx context.Context, query ledger.HistoryQuery) ([]ledger.Transaction, int64, error)
+	SubWallets(ctx context.Context) ([]ledger.SubWallet, error)
+	Accounts(ctx context.Context) ([]ledger.Account, error)
+	AllHistory(ctx context.Context, query ledger.AllHistoryQuery) ([]ledger.Transaction, int64, error)
+	// Fund and Withdraw are the only way the UI moves money (R15).
+	Fund(ctx context.Context, accountID, amountMsat int64) (ledger.Transaction, error)
+	Withdraw(ctx context.Context, accountID, amountMsat int64) (ledger.Transaction, error)
 }
 
 // Config sets up the server.
@@ -40,6 +46,7 @@ type Config struct {
 	AllowedHosts []string
 	Ledger       Ledger
 	Apps         AppService
+	SubWallets   SubWalletService
 	Log          *slog.Logger
 }
 
@@ -49,6 +56,7 @@ type Server struct {
 	hosts    map[string]bool
 	ledger   Ledger
 	apps     AppService
+	wallets  SubWalletService
 	log      *slog.Logger
 	pages    *template.Template
 	handler  http.Handler
@@ -59,6 +67,8 @@ type Server struct {
 	challenges map[string]time.Time // Challenge to when it was given.
 	order      []string             // Challenges, oldest first.
 	sessions   map[string]time.Time // Session token to when it ends.
+	forms      map[string]formToken // Form token to what it allows.
+	formOrder  []string             // Form tokens, oldest first.
 }
 
 // New returns the admin UI.
@@ -70,9 +80,10 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		adminKey: cfg.AdminKey, ledger: cfg.Ledger, apps: cfg.Apps, log: cfg.Log, pages: pages, now: time.Now,
+		adminKey: cfg.AdminKey, ledger: cfg.Ledger, apps: cfg.Apps, wallets: cfg.SubWallets, log: cfg.Log, pages: pages,
+		now:        time.Now,
 		hosts:      map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true},
-		challenges: map[string]time.Time{}, sessions: map[string]time.Time{},
+		challenges: map[string]time.Time{}, sessions: map[string]time.Time{}, forms: map[string]formToken{},
 	}
 	for _, host := range cfg.AllowedHosts {
 		s.hosts[strings.ToLower(strings.Trim(host, "[]"))] = true
@@ -90,6 +101,17 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("POST /apps/{id}", s.editApp)
 	mux.HandleFunc("GET /apps/{id}/delete", s.deleteAppPage)
 	mux.HandleFunc("POST /apps/{id}/delete", s.deleteApp)
+	mux.HandleFunc("GET /subwallets", s.subWalletsPage)
+	mux.HandleFunc("GET /subwallets/new", s.newSubWalletPage)
+	mux.HandleFunc("POST /subwallets", s.createSubWallet)
+	mux.HandleFunc("GET /subwallets/{id}", s.subWalletPage)
+	mux.HandleFunc("POST /subwallets/{id}/fund", s.fund)
+	mux.HandleFunc("POST /subwallets/{id}/withdraw", s.withdraw)
+	mux.HandleFunc("GET /subwallets/{id}/replace", s.replacePage)
+	mux.HandleFunc("POST /subwallets/{id}/replace", s.replace)
+	mux.HandleFunc("GET /subwallets/{id}/delete", s.deleteSubWalletPage)
+	mux.HandleFunc("POST /subwallets/{id}/delete", s.deleteSubWallet)
+	mux.HandleFunc("GET /transactions", s.transactionsPage)
 	s.handler = s.guard(mux)
 	return s, nil
 }

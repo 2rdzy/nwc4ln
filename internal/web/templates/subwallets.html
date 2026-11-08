@@ -1,0 +1,23 @@
+{{template "head" "nwc4ln: sub-wallets"}}
+{{template "nav"}}
+<main>
+<h1>Sub-wallets</h1>
+<p>A sub-wallet has its own balance, set aside from the main wallet. <a href="/subwallets/new" id="new">Add a sub-wallet</a></p>
+<p class="note" id="custody">Sub-wallets are custodial. Their money stays on this node: you hold it, and you could take it. Tell each holder so. Someone who dislikes that can run their own node.</p>
+{{if .}}
+<table id="subwallets">
+<tr><th>Name</th><th>Last used</th><th class="n">Balance</th></tr>
+{{range .}}
+<tr>
+<td><a href="/subwallets/{{.ID}}">{{.Name}}</a></td>
+<td>{{if .LastUsedAt.IsZero}}never{{else}}{{time .LastUsedAt}}{{end}}</td>
+<td class="n" id="balance-{{.ID}}">{{msat .BalanceMsat}}</td>
+</tr>
+{{end}}
+</table>
+<p class="small">Balances leave out what pending payments hold.</p>
+{{else}}
+<p id="none">No sub-wallets yet.</p>
+{{end}}
+</main>
+{{template "foot"}}

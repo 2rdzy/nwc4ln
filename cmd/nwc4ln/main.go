@@ -169,7 +169,8 @@ func runStart(ctx context.Context, configPath string, out io.Writer) (err error)
 	}
 	money.OnSettled(service.Notify)
 	ui, err := web.New(web.Config{
-		AdminKey: adminKey, AllowedHosts: cfg.AllowedHosts, Ledger: money, Apps: service, Log: slog.Default(),
+		AdminKey: adminKey, AllowedHosts: cfg.AllowedHosts, Ledger: money, Apps: service, SubWallets: service,
+		Log: slog.Default(),
 	})
 	if err != nil {
 		return err
