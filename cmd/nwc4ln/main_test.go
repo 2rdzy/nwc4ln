@@ -252,3 +252,28 @@ func TestAppAddRefusesWhileRunning(t *testing.T) {
 		t.Fatalf("printed %q", out.String())
 	}
 }
+
+// Catches: a backup that refuses, or waits, while the service holds the data folder.
+func TestBackupWhileRunning(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nwc4ln.toml")
+	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	release, err := store.Lock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = release() }()
+	dest := filepath.Join(t.TempDir(), "backup.db")
+	if err := run(t.Context(), []string{"backup", "--config", path, dest}, io.Discard); err != nil {
+		t.Fatalf("backup while locked: %v", err)
+	}
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(t.Context(), []string{"backup", "--config", path}, io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "usage") {
+		t.Fatalf("no file: %v", err)
+	}
+}

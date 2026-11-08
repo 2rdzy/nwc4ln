@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"testing/fstest"
 )
@@ -189,5 +190,63 @@ func TestLockIsExclusiveUntilReleased(t *testing.T) {
 	}
 	if err := again(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Catches: a backup readable by other users, which holds the wallet service keys
+// (VACUUM INTO alone gave 0644 under umask 022); leftover journal files; a backup that
+// overwrites an existing file; and a failed backup that leaves a file behind.
+func TestBackupFile(t *testing.T) {
+	old := syscall.Umask(0o022)
+	t.Cleanup(func() { syscall.Umask(old) })
+	db, path := newStore(t)
+	if _, err := db.DB.Exec("INSERT INTO settings VALUES ('a', 'b')"); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "backup.db")
+	if err := Backup(context.Background(), path, dest); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("folder holds %v, %v", entries, err)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != FileMode {
+		t.Fatalf("backup has mode %o, want %o", got, FileMode)
+	}
+
+	if err := Backup(context.Background(), path, dest); err == nil {
+		t.Fatal("no error for an existing file")
+	}
+	restored, err := Open(context.Background(), dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = restored.Close() }()
+	var value string
+	if err := restored.DB.QueryRow("SELECT value FROM settings WHERE key = 'a'").Scan(&value); err != nil || value != "b" {
+		t.Fatalf("existing backup changed: %q, %v", value, err)
+	}
+
+	foreign := filepath.Join(t.TempDir(), "other.db")
+	other, err := sql.Open("sqlite", foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Exec("CREATE TABLE t (x)"); err != nil {
+		t.Fatal(err)
+	}
+	_ = other.Close()
+	failed := filepath.Join(dir, "failed.db")
+	if err := Backup(context.Background(), foreign, failed); err == nil {
+		t.Fatal("backed up a database that is not nwc4ln's")
+	}
+	if _, err := os.Stat(failed); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed backup left a file: %v", err)
 	}
 }

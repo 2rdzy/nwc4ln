@@ -22,6 +22,10 @@ type Harness struct {
 	OutsideInvoice func(t *testing.T, amountMsat int64) string
 	// PayFromOutside pays an invoice made on Node, and returns once it settles.
 	PayFromOutside func(t *testing.T, invoice node.Invoice)
+	// StartHeld has Node pay someone outside who holds the payment, so that it stays
+	// in flight. It returns the payment hash, and fail, which makes the payee give the
+	// payment back.
+	StartHeld func(t *testing.T, amountMsat int64) (hash string, fail func())
 }
 
 const (
@@ -90,6 +94,7 @@ func Run(t *testing.T, h Harness) {
 		{"SelfPaymentLeavesNoRecord", testSelfPaymentLeavesNoRecord},
 		{"PayRefusesZeroFeeLimit", testPayRefusesZeroFeeLimit},
 		{"SpendableFollowsMoney", testSpendableFollowsMoney},
+		{"SpendableDuringFlight", testSpendableDuringFlight},
 		{"DescriptionLimit", testDescriptionLimit},
 		{"SubscribeResumesFromIndex", testSubscribeResumesFromIndex},
 		{"SubscribeFromZeroHasNoBacklog", testSubscribeFromZeroHasNoBacklog},
@@ -339,6 +344,64 @@ func testSpendableFollowsMoney(t *testing.T, h Harness) {
 	h.waitSpendable(t, start.ActiveMsat-amountMsat-paid.FeeMsat)
 	h.settled(t)
 	h.waitSpendable(t, start.ActiveMsat-paid.FeeMsat)
+}
+
+// heldMsat is above any dust limit, so that on LND the HTLC gets its own output and
+// its commitment fee is part of the cost.
+const heldMsat = 20_000_000
+
+// inFlight sums the cost of the outgoing HTLCs with the hash. Every one must be on an
+// active channel and cost at least its amount.
+func inFlight(t *testing.T, spendable node.Spendable, hash string) int64 {
+	t.Helper()
+	var cost int64
+	for _, htlc := range spendable.Outgoing {
+		if htlc.Hash != hash {
+			continue
+		}
+		if !htlc.Active || htlc.CostMsat < htlc.AmountMsat {
+			t.Fatalf("HTLC %+v", htlc)
+		}
+		cost += htlc.CostMsat
+	}
+	return cost
+}
+
+// Catches: a payment in flight that the node leaves in its figure, or lists at a cost
+// other than what it took, on LND or on the fake. The ledger adds that cost back, so a
+// wrong one shows as a false shortfall (R14) or an overstated main wallet (R5).
+func testSpendableDuringFlight(t *testing.T, h Harness) {
+	ctx := t.Context()
+	start, err := h.Node.Spendable(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, fail := h.StartHeld(t, heldMsat)
+	var during node.Spendable
+	for deadline := time.Now().Add(wait); ; time.Sleep(50 * time.Millisecond) {
+		if during, err = h.Node.Spendable(ctx); err != nil {
+			t.Fatal(err)
+		}
+		cost := inFlight(t, during, hash)
+		if cost >= heldMsat && during.ActiveMsat == start.ActiveMsat-cost && during.AllMsat == start.AllMsat-cost {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("in flight: %+v, at start %+v", during, start)
+		}
+	}
+	fail()
+	for deadline := time.Now().Add(wait); ; time.Sleep(50 * time.Millisecond) {
+		if during, err = h.Node.Spendable(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if inFlight(t, during, hash) == 0 && during.ActiveMsat == start.ActiveMsat {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after failing: %+v, at start %+v", during, start)
+		}
+	}
 }
 
 func (h Harness) subscribe(t *testing.T, from uint64) (<-chan node.Invoice, context.CancelFunc) {

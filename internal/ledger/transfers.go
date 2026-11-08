@@ -96,7 +96,7 @@ func (l *Ledger) holdTransfer(ctx context.Context, move transfer, invoice node.I
 	}
 	var fits int64
 	if move.toSubWallet {
-		fits, err = availableFrom(ctx, tx, spendable.ActiveMsat)
+		fits, err = availableFrom(ctx, tx, spendable)
 	} else {
 		fits, err = subWalletBalance(ctx, tx, move.accountID)
 	}

@@ -161,6 +161,7 @@ func (n *Node) Finish(hash string, succeeded bool) error {
 	if !ok || payment.State != node.PaymentInFlight {
 		return fmt.Errorf("fake: no payment in flight for %s", hash)
 	}
+	n.moveSpendable(payment.AmountMsat + payment.FeeMsat) // Its HTLC resolves.
 	n.finish(payment, succeeded)
 	return nil
 }
@@ -256,7 +257,16 @@ func (n *Node) Spendable(ctx context.Context) (node.Spendable, error) {
 		return node.Spendable{}, err
 	}
 	defer n.mu.Unlock()
-	return n.spendable, nil
+	spendable := n.spendable
+	spendable.Outgoing = nil // Only payments in flight give HTLCs.
+	for _, hash := range slices.Sorted(maps.Keys(n.payments)) {
+		if payment := n.payments[hash]; payment.State == node.PaymentInFlight {
+			spendable.Outgoing = append(spendable.Outgoing, node.HTLC{
+				Hash: hash, AmountMsat: payment.AmountMsat, CostMsat: payment.AmountMsat + payment.FeeMsat, Active: true,
+			})
+		}
+	}
+	return spendable, nil
 }
 
 // MakeInvoice implements node.Node.
@@ -342,9 +352,8 @@ func (n *Node) DecodeInvoice(ctx context.Context, invoice string) (node.DecodedI
 	return node.DecodedInvoice{}, fmt.Errorf("fake: cannot decode invoice %q", invoice)
 }
 
-// Pay implements node.Node. Spendable changes only at a payment's final state. LND
-// very likely lowers its figure while a payment is in flight, and the ledger then
-// counts that payment twice for a moment, which is the safe direction.
+// Pay implements node.Node. As on LND, a payment left in flight has already left
+// Spendable, and is listed there as one HTLC that costs its amount plus fee.
 func (n *Node) Pay(ctx context.Context, request node.PayRequest) (node.Payment, error) {
 	if err := request.Check(); err != nil {
 		return node.Payment{}, err
@@ -382,6 +391,7 @@ func (n *Node) Pay(ctx context.Context, request node.PayRequest) (node.Payment, 
 	n.payments[decoded.Hash] = payment
 	switch {
 	case step == PayTimeout:
+		n.moveSpendable(-(amount + n.routeFee))
 		return node.Payment{}, ErrPayTimeout
 	case step == PayFail, n.routeFee > request.FeeLimitMsat:
 		n.finish(payment, false)

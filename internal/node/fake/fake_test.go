@@ -23,6 +23,23 @@ func TestBehaviour(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
+		StartHeld: func(t *testing.T, amountMsat int64) (string, func()) {
+			invoice := fake.OutsideInvoice(amountMsat)
+			fake.ScriptPay(PayTimeout)
+			request := node.PayRequest{Invoice: invoice, FeeLimitMsat: 10_000, Timeout: time.Second}
+			if _, err := fake.Pay(t.Context(), request); !errors.Is(err, ErrPayTimeout) {
+				t.Fatal(err)
+			}
+			decoded, err := fake.DecodeInvoice(t.Context(), invoice)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return decoded.Hash, func() {
+				if err := fake.Finish(decoded.Hash, false); err != nil {
+					t.Error(err)
+				}
+			}
+		},
 	})
 }
 
@@ -207,14 +224,14 @@ func TestSpendableMoney(t *testing.T) {
 		}
 		want(t, fake, 1_000_000)
 	})
-	t.Run("InFlightMovesAtTheEnd", func(t *testing.T) {
+	t.Run("InFlightLeavesAtOnce", func(t *testing.T) {
 		fake := funded()
 		fake.ScriptPay(PayTimeout)
 		invoice := fake.OutsideInvoice(1_000)
 		if _, err := fake.Pay(ctx, pay(invoice)); !errors.Is(err, ErrPayTimeout) {
 			t.Fatal(err)
 		}
-		want(t, fake, 1_000_000)
+		want(t, fake, 999_000)
 		decoded, err := fake.DecodeInvoice(ctx, invoice)
 		if err != nil {
 			t.Fatal(err)
@@ -223,6 +240,24 @@ func TestSpendableMoney(t *testing.T) {
 			t.Fatal(err)
 		}
 		want(t, fake, 999_000)
+	})
+	t.Run("InFlightFailureReturns", func(t *testing.T) {
+		fake := funded()
+		fake.SetRouteFee(7)
+		fake.ScriptPay(PayTimeout)
+		invoice := fake.OutsideInvoice(1_000)
+		if _, err := fake.Pay(ctx, pay(invoice)); !errors.Is(err, ErrPayTimeout) {
+			t.Fatal(err)
+		}
+		want(t, fake, 998_993)
+		decoded, err := fake.DecodeInvoice(ctx, invoice)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fake.Finish(decoded.Hash, false); err != nil {
+			t.Fatal(err)
+		}
+		want(t, fake, 1_000_000)
 	})
 	t.Run("MoreThanTheNodeHasFails", func(t *testing.T) {
 		fake := New()

@@ -122,6 +122,14 @@ func harness(n *integration.Network, c node.Node) nodetest.Harness {
 			request, _ := outsideInvoice(t, n, amountMsat)
 			return request
 		},
+		StartHeld: func(t *testing.T, amountMsat int64) (string, func()) {
+			hash, _ := startHeldSats(t, n, c, int(amountMsat/1000))
+			return hash, func() {
+				if _, err := n.LNCLI(t.Context(), other, "cancelinvoice", hash); err != nil {
+					t.Error(err)
+				}
+			}
+		},
 		PayFromOutside: func(t *testing.T, invoice node.Invoice) {
 			// lncli reports a failed payment in its output and also exits non-zero.
 			if _, err := n.LNCLI(t.Context(), other, "payinvoice", "--force", "--json", "--timeout", "30s",
@@ -151,7 +159,12 @@ func holdInvoice(t *testing.T, n *integration.Network, sats int) (request, hash,
 // the payee, and returns its hash. This is a timeout on a real node.
 func startHeld(t *testing.T, n *integration.Network, c node.Node) (hash, preimage string) {
 	t.Helper()
-	request, hash, preimage := holdInvoice(t, n, 2_000)
+	return startHeldSats(t, n, c, 2_000)
+}
+
+func startHeldSats(t *testing.T, n *integration.Network, c node.Node, sats int) (hash, preimage string) {
+	t.Helper()
+	request, hash, preimage := holdInvoice(t, n, sats)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	payment, err := c.Pay(ctx, node.PayRequest{Invoice: request, FeeLimitMsat: 10_000, Timeout: 30 * time.Second})

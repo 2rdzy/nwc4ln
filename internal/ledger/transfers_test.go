@@ -192,6 +192,10 @@ func TestWithdrawUpToTheBalance(t *testing.T) {
 		t.Fatalf("one msat over: %v", err)
 	}
 	before := e.available()
+	funds, err := e.node.Spendable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	e.node.SetSpendable(node.Spendable{}) // More is owed than the node holds.
 	row := e.move(e.ledger.Withdraw, wallet, free)
 	if got := e.balance(wallet); got != 0 {
@@ -201,7 +205,7 @@ func TestWithdrawUpToTheBalance(t *testing.T) {
 	if outgoing.AccountID != wallet || incoming.AccountID != 0 || outgoing.ReserveMsat != 0 {
 		t.Fatalf("outgoing %+v, incoming %+v", outgoing, incoming)
 	}
-	e.node.SetSpendable(node.Spendable{ActiveMsat: testFunds + 1_000*sat})
+	e.node.SetSpendable(funds)
 	if got := e.available(); got != before+free {
 		t.Fatalf("available %d, was %d", got, before)
 	}

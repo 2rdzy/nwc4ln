@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/2rdzy/nwc4ln/internal/node"
 )
 
 // Renewal periods of a limit.
@@ -180,25 +182,72 @@ func usedMsat(ctx context.Context, db querier, accountID int64, since time.Time)
 	return used, err
 }
 
-// availableFrom is R5, given the node's spendable figure. It can be below 0.
-func availableFrom(ctx context.Context, db querier, spendableMsat int64) (int64, error) {
+// availableFrom is R5, given the node's figures. It can be below 0. Payments in
+// flight on active channels are added back, because their holds count them too.
+func availableFrom(ctx context.Context, db querier, spendable node.Spendable) (int64, error) {
+	inFlight, err := inFlightMsat(ctx, db, spendable.Outgoing, true)
+	if err != nil {
+		return 0, err
+	}
 	promised, err := subWalletTotal(ctx, db)
 	if err != nil {
 		return 0, err
 	}
-	var holds int64
-	err = db.QueryRowContext(ctx, `SELECT coalesce(sum(amount_msat + reserve_msat), 0) FROM transactions
-		WHERE type = 'outgoing' AND state = 'pending'`).Scan(&holds)
+	holds, err := pendingHolds(ctx, db)
 	if err != nil {
 		return 0, err
 	}
-	return spendableMsat - promised - holds, nil
+	return spendable.ActiveMsat + inFlight - promised - holds, nil
+}
+
+// pendingHolds is what every pending payment holds, apps and sub-wallets alike.
+func pendingHolds(ctx context.Context, db querier) (int64, error) {
+	var holds int64
+	err := db.QueryRowContext(ctx, `SELECT coalesce(sum(amount_msat + reserve_msat), 0) FROM transactions
+		WHERE type = 'outgoing' AND state = 'pending'`).Scan(&holds)
+	return holds, err
+}
+
+// inFlightMsat is what the node's HTLCs for the ledger's own pending payments took
+// from its figures. Those payments are held, so without this they would count twice.
+// Any other HTLC, such as a payment made outside nwc4ln or a forward, is not added
+// back: nothing holds it, and adding it would overstate the node during a drain. With
+// activeOnly, only HTLCs on active channels count, as for ActiveMsat.
+func inFlightMsat(ctx context.Context, db querier, htlcs []node.HTLC, activeOnly bool) (int64, error) {
+	if len(htlcs) == 0 {
+		return 0, nil
+	}
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT payment_hash FROM transactions
+		WHERE type = 'outgoing' AND state = 'pending' AND internal = 0`)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	held := map[string]bool{}
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return 0, err
+		}
+		held[hash] = true
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, htlc := range htlcs {
+		if held[htlc.Hash] && (htlc.Active || !activeOnly) {
+			total += htlc.CostMsat
+		}
+	}
+	return total, nil
 }
 
 // checkFunds is R7. A sub-wallet needs only its own balance. An app needs its limit,
 // then the main wallet. Exact msat comparisons.
 func (l *Ledger) checkFunds(
-	ctx context.Context, db querier, accountID int64, subWallet bool, settings AppSettings, spendableMsat, costMsat int64,
+	ctx context.Context, db querier, accountID int64, subWallet bool, settings AppSettings, spendable node.Spendable,
+	costMsat int64,
 ) error {
 	if subWallet {
 		balance, err := subWalletBalance(ctx, db, accountID)
@@ -219,11 +268,14 @@ func (l *Ledger) checkFunds(
 			return ErrQuotaExceeded
 		}
 	}
-	available, err := availableFrom(ctx, db, spendableMsat)
+	available, err := availableFrom(ctx, db, spendable)
 	if err != nil {
 		return err
 	}
 	if costMsat > available {
+		// The usual sign of a shortfall (R14), so the admin needs to see it.
+		l.log.Warn("app refused: main wallet too low", "account", accountID, "cost_msat", costMsat,
+			"available_msat", available)
 		return ErrInsufficientBalance
 	}
 	return nil
@@ -237,7 +289,34 @@ func (l *Ledger) MainAvailable(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("read spendable: %w", err)
 	}
-	return availableFrom(ctx, l.db, spendable.ActiveMsat)
+	return availableFrom(ctx, l.db, spendable)
+}
+
+// Shortfall is R14: what the ledger owes to sub-wallets and pending payments, less
+// what the node can send over all open channels, so that an offline peer raises no
+// alarm. Above 0, the node holds less than the ledger promises. It is read under the
+// one lock, like a payment check, so that no payment can settle between the node's
+// figure and the rows. It fails if the node cannot be asked.
+func (l *Ledger) Shortfall(ctx context.Context) (int64, error) {
+	l.holdLock.Lock()
+	defer l.holdLock.Unlock()
+	spendable, err := l.readSpendable(ctx)
+	if err != nil {
+		return 0, err
+	}
+	inFlight, err := inFlightMsat(ctx, l.db, spendable.Outgoing, false)
+	if err != nil {
+		return 0, err
+	}
+	promised, err := subWalletTotal(ctx, l.db)
+	if err != nil {
+		return 0, err
+	}
+	holds, err := pendingHolds(ctx, l.db)
+	if err != nil {
+		return 0, err
+	}
+	return promised + holds - spendable.AllMsat - inFlight, nil
 }
 
 // AppBudget returns an app's limit in the current period, or nil if it has none. A

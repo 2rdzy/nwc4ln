@@ -29,6 +29,7 @@ const testFunds = 1_000_000_000 * sat
 type env struct {
 	t      *testing.T
 	store  *store.Store
+	path   string // Of the database.
 	node   *fake.Node
 	ledger *Ledger
 	now    *atomic.Int64 // Unix seconds, read by the ledger's clock.
@@ -38,12 +39,13 @@ type env struct {
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Create(ctx, filepath.Join(t.TempDir(), "test.db"))
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := store.Create(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	e := &env{t: t, store: db, node: fake.New(), now: &atomic.Int64{}}
+	e := &env{t: t, store: db, path: path, node: fake.New(), now: &atomic.Int64{}}
 	e.node.SetSpendable(node.Spendable{ActiveMsat: testFunds, AllMsat: testFunds})
 	e.now.Store(time.Now().Unix())
 	result, err := db.DB.ExecContext(ctx, `INSERT INTO accounts (type, name, can_pay, can_invoice, created_at)
