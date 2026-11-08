@@ -1,0 +1,12 @@
+{{template "head" "nwc4ln: delete a sub-wallet"}}
+{{template "nav"}}
+<main>
+<h1>Delete {{.Name}}?</h1>
+{{if gt .BalanceMsat 0}}<p class="warn" id="funds">It holds <b id="balance">{{msat .BalanceMsat}}</b>. Deleting moves this to the main wallet: the holder loses it.</p>
+{{else}}<p id="empty">Its balance is <span id="balance">{{msat .BalanceMsat}}</span>.</p>{{end}}
+<p>Its connection stops working at once. The balance moves to the main wallet as a recorded withdraw once the node answers, within one sweep. Pending payments finish, and anything they release moves the same way. The history is kept.</p>
+<form method="post" action="/subwallets/{{.ID}}/delete">
+<p><button type="submit">Delete the sub-wallet</button> <a href="/subwallets/{{.ID}}">Cancel</a></p>
+</form>
+</main>
+{{template "foot"}}

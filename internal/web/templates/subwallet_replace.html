@@ -1,0 +1,10 @@
+{{template "head" "nwc4ln: replace a connection string"}}
+{{template "nav"}}
+<main>
+<h1>Replace the connection string of {{.Name}}?</h1>
+<p>The current string stops working at once. The next page shows a new one, once. The balance and history stay.</p>
+<form method="post" action="/subwallets/{{.ID}}/replace">
+<p><button type="submit">Replace it</button> <a href="/subwallets/{{.ID}}">Cancel</a></p>
+</form>
+</main>
+{{template "foot"}}

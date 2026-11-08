@@ -27,7 +27,7 @@
 
 <h2>Transactions</h2>
 {{if .Transactions}}
-<p class="small">The latest {{len .Transactions}} of {{.Total}}, newest first, in every state.</p>
+<p class="small">The latest {{len .Transactions}} of {{.Total}}, newest first, in every state. <a href="/transactions?account={{.App.ID}}">All of them</a></p>
 <table id="transactions">
 <tr><th>Created</th><th>Type</th><th>State</th><th class="n">Amount</th><th class="n">Fee</th><th>Description</th></tr>
 {{range .Transactions}}

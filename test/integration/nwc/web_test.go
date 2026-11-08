@@ -172,6 +172,90 @@ func TestAdminUI(t *testing.T) {
 			t.Fatalf("deleted app still served: %+v", reply.Error)
 		}
 	})
+
+	t.Run("SubWalletThroughUI", func(t *testing.T) {
+		connect := func(page string) *nwctest.Client {
+			t.Helper()
+			match := regexp.MustCompile(`<textarea id="connection"[^>]*>([^<]+)<`).FindStringSubmatch(page)
+			if match == nil {
+				t.Fatalf("no connection string:\n%s", page)
+			}
+			client, err := nwctest.Parse(html.UnescapeString(match[1]))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(client.Close)
+			waitForInfo(t, client)
+			return client
+		}
+		balanceOf := func(client *nwctest.Client) int64 {
+			t.Helper()
+			reply := call(t, client, nwctest.NIP44, "get_balance")
+			if reply.Error != nil {
+				t.Fatalf("get_balance: %+v", reply.Error)
+			}
+			var result struct {
+				Balance int64 `json:"balance"`
+			}
+			if err := json.Unmarshal(reply.Result, &result); err != nil {
+				t.Fatal(err)
+			}
+			return result.Balance
+		}
+
+		response, page := postForm(t, client, base, "/subwallets", url.Values{"name": {"alice"}})
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("create: %d\n%s", response.StatusCode, page)
+		}
+		holder := connect(page)
+		_, list := get(t, client, base+"/subwallets")
+		id := regexp.MustCompile(`<a href="/subwallets/(\d+)">alice</a>`).FindStringSubmatch(list)
+		if id == nil {
+			t.Fatalf("new sub-wallet not listed:\n%s", list)
+		}
+		path := "/subwallets/" + id[1]
+		// Each move goes through the real node: an invoice, then its cancel (R10).
+		move := func(action, sats string) {
+			t.Helper()
+			_, page := get(t, client, base+path)
+			token := regexp.MustCompile(`action="` + path + `/` + action + `">\s*<input type="hidden" name="token" value="([0-9a-f]{64})"`).
+				FindStringSubmatch(page)
+			if token == nil {
+				t.Fatalf("no %s form:\n%s", action, page)
+			}
+			response, result := postForm(t, client, base, path+"/"+action, url.Values{"amount": {sats}, "token": {token[1]}})
+			if response.StatusCode != http.StatusOK || !strings.Contains(result, `id="result">Done:`) {
+				t.Fatalf("%s: %d\n%s", action, response.StatusCode, result)
+			}
+		}
+		move("fund", "1000")
+		if balance := balanceOf(holder); balance != 1_000_000 {
+			t.Fatalf("after fund the holder sees %d msat", balance)
+		}
+		move("withdraw", "400")
+		if balance := balanceOf(holder); balance != 600_000 {
+			t.Fatalf("after withdraw the holder sees %d msat", balance)
+		}
+
+		response, page = postForm(t, client, base, path+"/replace", nil)
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("replace: %d\n%s", response.StatusCode, page)
+		}
+		replaced := connect(page)
+		if reply := call(t, holder, nwctest.NIP44, "get_info"); reply.Error == nil || reply.Error.Code != "UNAUTHORIZED" {
+			t.Fatalf("replaced key still served: %+v", reply.Error)
+		}
+		if balance := balanceOf(replaced); balance != 600_000 {
+			t.Fatalf("after replace the holder sees %d msat", balance)
+		}
+
+		if response, _ := postForm(t, client, base, path+"/delete", nil); response.StatusCode != http.StatusSeeOther {
+			t.Fatalf("delete: %d", response.StatusCode)
+		}
+		if reply := call(t, replaced, nwctest.NIP44, "get_info"); reply.Error == nil || reply.Error.Code != "UNAUTHORIZED" {
+			t.Fatalf("deleted sub-wallet still served: %+v", reply.Error)
+		}
+	})
 }
 
 // postForm sends a form as the admin's browser would, with its origin.

@@ -30,6 +30,8 @@ type appsEnv struct {
 	cookie  *http.Cookie
 	ledger  *ledger.Ledger
 	service *nwc.Service
+	node    *fake.Node
+	db      *store.Store
 	dbPath  string
 	log     *bytes.Buffer
 }
@@ -51,8 +53,8 @@ func newAppsEnv(t *testing.T) *appsEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := newEnvWith(t, Config{Ledger: l, Apps: service, Log: log})
-	return &appsEnv{env: e, cookie: e.login(), ledger: l, service: service, dbPath: dbPath, log: &logs}
+	e := newEnvWith(t, Config{Ledger: l, Apps: service, SubWallets: service, Log: log})
+	return &appsEnv{env: e, cookie: e.login(), ledger: l, service: service, node: n, db: db, dbPath: dbPath, log: &logs}
 }
 
 // post sends a form as the logged-in admin's browser would.

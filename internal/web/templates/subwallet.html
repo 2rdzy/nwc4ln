@@ -1,0 +1,45 @@
+{{template "head" "nwc4ln: sub-wallet"}}
+{{template "nav"}}
+<main>
+<h1>{{.Wallet.Name}}</h1>
+<table>
+<tr><td>Added</td><td>{{time .Wallet.CreatedAt}}</td></tr>
+<tr><td>Last used</td><td>{{if .Wallet.LastUsedAt.IsZero}}never{{else}}{{time .Wallet.LastUsedAt}}{{end}}</td></tr>
+<tr><th>Balance</th><td class="n" id="balance"><b>{{msat .Wallet.BalanceMsat}}</b></td></tr>
+</table>
+<p class="small">The balance leaves out what pending payments hold. It belongs to the holder.</p>
+
+<h2>Fund</h2>
+<form method="post" action="/subwallets/{{.Wallet.ID}}/fund">
+<input type="hidden" name="token" value="{{.FundToken}}">
+<p><label>Sats <input name="amount" inputmode="numeric" pattern="[0-9]*" required></label> <button type="submit">Fund from the main wallet</button></p>
+<p class="small">Up to the main wallet available, which the dashboard shows. The node must be reachable.</p>
+</form>
+
+<h2>Withdraw</h2>
+<form method="post" action="/subwallets/{{.Wallet.ID}}/withdraw">
+<input type="hidden" name="token" value="{{.WithdrawToken}}">
+<p><label>Sats <input name="amount" inputmode="numeric" pattern="[0-9]*" required></label> <button type="submit">Withdraw to the main wallet</button></p>
+<p class="small">Up to {{sats .Wallet.Withdrawable}}. The money stays on the node: it moves to the main wallet. The node must be reachable.</p>
+</form>
+
+<h2>Transactions</h2>
+{{if .Transactions}}
+<p class="small">The latest {{len .Transactions}} of {{.Total}}, newest first, in every state. <a href="/transactions?account={{.Wallet.ID}}">All of them</a></p>
+<table id="transactions">
+<tr><th>Created</th><th>Type</th><th>State</th><th class="n">Amount</th><th class="n">Fee</th><th>Description</th></tr>
+{{range .Transactions}}
+<tr><td>{{time .CreatedAt}}</td><td>{{.Type}}{{if .Internal}} (internal){{end}}</td><td>{{.State}}</td><td class="n">{{msat .AmountMsat}}</td><td class="n">{{msat .FeeMsat}}</td><td>{{.Description}}</td></tr>
+{{end}}
+</table>
+{{else}}
+<p id="no-transactions">No transactions yet.</p>
+{{end}}
+
+<h2>Connection</h2>
+<p><a href="/subwallets/{{.Wallet.ID}}/replace">Replace the connection string</a> <span class="small">if the holder lost it or it was stolen.</span></p>
+
+<h2>Delete</h2>
+<p><a href="/subwallets/{{.Wallet.ID}}/delete">Delete this sub-wallet</a></p>
+</main>
+{{template "foot"}}
