@@ -25,7 +25,7 @@ import (
 const (
 	databaseName = "nwc4ln.db"
 	dataDirMode  = 0o700
-	usage        = "usage: nwc4ln init [--admin npub] [--config path], nwc4ln <start|app add --name name [--invoice]> [--config path], " +
+	usage        = "usage: nwc4ln init [--admin npub] [--config path], nwc4ln start [--config path], " +
 		"nwc4ln backup [--config path] <file>, or nwc4ln set-admin [--config path] <npub>"
 )
 
@@ -44,17 +44,9 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return errors.New(usage)
 	}
 	command, rest := args[0], args[1:]
-	if command == "app" {
-		if len(rest) == 0 || rest[0] != "add" {
-			return errors.New(usage)
-		}
-		command, rest = "app add", rest[1:]
-	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(out)
 	configPath := flags.String("config", "", "config file (default ~/.nwc4ln/nwc4ln.toml)")
-	name := flags.String("name", "", "app name (app add)")
-	canInvoice := flags.Bool("invoice", false, "let the app make invoices (app add)")
 	admin := flags.String("admin", "", "the admin's npub (init)")
 	if err := flags.Parse(rest); err != nil {
 		return err
@@ -82,8 +74,6 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return runInit(ctx, path, *admin, out)
 	case "start":
 		return runStart(ctx, path, out)
-	case "app add":
-		return runAppAdd(ctx, path, *name, *canInvoice, out)
 	case "backup":
 		return runBackup(ctx, path, flags.Arg(0), out)
 	case "set-admin":
@@ -179,7 +169,7 @@ func runStart(ctx context.Context, configPath string, out io.Writer) (err error)
 	}
 	money.OnSettled(service.Notify)
 	ui, err := web.New(web.Config{
-		AdminKey: adminKey, AllowedHosts: cfg.AllowedHosts, Ledger: money, Log: slog.Default(),
+		AdminKey: adminKey, AllowedHosts: cfg.AllowedHosts, Ledger: money, Apps: service, Log: slog.Default(),
 	})
 	if err != nil {
 		return err
@@ -210,34 +200,6 @@ func runStart(ctx context.Context, configPath string, out io.Writer) (err error)
 		service.Run(ctx)
 	}
 	fmt.Fprintln(out, "stopped")
-	return nil
-}
-
-// runAppAdd creates an app and prints its connection string. It takes the data
-// folder lock, so it refuses while the service runs: nothing changes the data
-// from outside the running service.
-func runAppAdd(ctx context.Context, configPath, name string, canInvoice bool, out io.Writer) (err error) {
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return err
-	}
-	release, err := store.Lock(cfg.DataDir)
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, release()) }()
-	db, err := store.Open(ctx, filepath.Join(cfg.DataDir, databaseName))
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, db.Close()) }()
-	settings := ledger.DefaultApp()
-	settings.CanInvoice = canInvoice
-	connectionString, err := nwc.AddApp(ctx, db, name, cfg.Relay, settings)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintln(out, connectionString)
 	return nil
 }
 

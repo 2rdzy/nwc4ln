@@ -31,8 +31,9 @@ func CheckRelay(relay string) error {
 
 // AddApp creates an app with one connection, and returns its connection string.
 // That string is the only copy of the client secret: only the public key is stored,
-// so this is the one time it can be shown. A running service must use its own
-// AddApp, so that it starts listening for the new connection.
+// so this is the one time it can be shown. It is for tests and for a database no
+// service has open. A running service must use its own AddApp, which the admin UI
+// calls, so that it starts listening for the new connection.
 func AddApp(
 	ctx context.Context, db *store.Store, name, relay string, settings ledger.AppSettings,
 ) (connectionString string, err error) {

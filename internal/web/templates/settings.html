@@ -1,0 +1,13 @@
+{{define "settings"}}
+<p><label>Limit in sats <input name="limit" inputmode="numeric" pattern="[0-9]*" value="{{.App.LimitInput}}"></label><br>
+<span class="small">Empty for no limit: the app can spend all of the main wallet available. 0 allows nothing.</span></p>
+<p><label>Renewal <select name="renewal">
+{{range .Renewals}}<option value="{{.}}"{{if eq . $.App.Renewal}} selected{{end}}>{{.}}</option>{{end}}
+</select></label><br>
+<span class="small">Periods follow the calendar in UTC. Weeks start on Monday.</span></p>
+<p><label>Last day <input name="expires" type="date" value="{{.App.LastDay}}"></label><br>
+<span class="small">The app works until the end of this day, UTC. Empty: it does not expire.</span></p>
+<p><label><input type="checkbox" name="can_pay"{{if .App.CanPay}} checked{{end}}> Pay invoices</label><br>
+<span class="small">With pay off, the app can only make and look up invoices: it cannot read the balance or history.</span></p>
+<p><label><input type="checkbox" name="can_invoice"{{if .App.CanInvoice}} checked{{end}}> Make invoices</label></p>
+{{end}}

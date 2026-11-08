@@ -1,0 +1,11 @@
+{{template "head" "nwc4ln: add an app"}}
+{{template "nav"}}
+<main>
+<h1>Add an app</h1>
+<form method="post" action="/apps">
+<p><label>Name <input name="name" required maxlength="100"></label></p>
+{{template "settings" .}}
+<p><button type="submit">Add the app</button></p>
+</form>
+</main>
+{{template "foot"}}
