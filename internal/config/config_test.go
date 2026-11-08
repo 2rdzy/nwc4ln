@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -28,6 +29,10 @@ func TestLoadRefusesBadConfig(t *testing.T) {
 		{"no data folder", "listen='127.0.0.1:1'", "data_dir is required"},
 		{"relative data folder", "data_dir='d'\nlisten='127.0.0.1:1'", "absolute"},
 		{"bad listen address", "data_dir='/d'\nlisten='nowhere'", "host:port"},
+		{"every interface", "data_dir='/d'\nlisten=':8080'", "loopback"},
+		{"public address", "data_dir='/d'\nlisten='192.168.1.2:8080'", "loopback"},
+		{"host name", "data_dir='/d'\nlisten='example.com:8080'", "loopback"},
+		{"allowed host with port", "data_dir='/d'\nlisten='127.0.0.1:1'\nallowed_hosts=['a.example:80']", "without a port"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -50,6 +55,7 @@ func TestWriteThenLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nwc4ln.toml")
 	want := Default("/data/with \"quotes\"")
 	want.Relay = "ws://127.0.0.1:1"
+	want.AllowedHosts = []string{"nwc.example"}
 	if err := Write(path, want); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +63,7 @@ func TestWriteThenLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 }

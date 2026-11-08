@@ -199,3 +199,42 @@ func TestInFlightMsat(t *testing.T) {
 		}
 	}
 }
+
+// Catches: a dashboard snapshot that drifts from R5 or R14, or from the rows, while a
+// payment is in flight and a peer is offline; and a snapshot that shows a figure when
+// the node cannot be read.
+func TestOverview(t *testing.T) {
+	e := newEnv(t)
+	e.start()
+	wallet := e.addSubWallet()
+	e.fund(wallet, 1_000*sat)
+	e.node.SetSpendable(node.Spendable{ActiveMsat: 2_000 * sat, AllMsat: 2_500 * sat}) // A peer is offline.
+	e.node.ScriptPay(fake.PayTimeout)
+	held, err := e.payFrom(wallet, 100*sat)
+	if err != nil || held.State != StatePending {
+		t.Fatalf("payment %+v, %v", held, err)
+	}
+	got, err := e.ledger.Overview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold := 100*sat + Reserve(100*sat)
+	want := Overview{
+		NodeSpendableMsat: 2_000 * sat,
+		SubWalletMsat:     1_000*sat - hold,
+		HoldsMsat:         hold,
+		MainAvailableMsat: 1_000 * sat,
+		ShortfallMsat:     -1_500 * sat,
+	}
+	if got != want {
+		t.Fatalf("overview %+v, want %+v", got, want)
+	}
+	if got.MainAvailableMsat != e.available() || got.ShortfallMsat != e.shortfall() {
+		t.Fatalf("overview %+v disagrees with MainAvailable %d or Shortfall %d", got, e.available(), e.shortfall())
+	}
+
+	e.node.SetUnreachable(true)
+	if got, err := e.ledger.Overview(context.Background()); err == nil {
+		t.Fatalf("overview %+v with the node down", got)
+	}
+}

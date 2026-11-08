@@ -254,3 +254,28 @@ func syncFile(path string) error {
 	}
 	return nil
 }
+
+// adminKeySetting is the settings row with the admin's public key, in hex.
+const adminKeySetting = "admin_pubkey"
+
+// AdminKey returns the admin's public key in hex, or "" if none is set.
+func (s *Store) AdminKey(ctx context.Context) (string, error) {
+	var key string
+	err := s.DB.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, adminKeySetting).Scan(&key)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return key, err
+}
+
+// SetAdminKey stores the admin's public key, in hex, replacing any earlier one.
+func (s *Store) SetAdminKey(ctx context.Context, key string) error {
+	if !hexKey.MatchString(key) {
+		return fmt.Errorf("admin key must be 64 lowercase hex characters, got %q", key)
+	}
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, ?)
+		ON CONFLICT (key) DO UPDATE SET value = excluded.value`, adminKeySetting, key)
+	return err
+}
+
+var hexKey = regexp.MustCompile(`^[0-9a-f]{64}$`)

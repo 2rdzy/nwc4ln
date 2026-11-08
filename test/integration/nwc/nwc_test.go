@@ -17,6 +17,7 @@ import (
 
 	"github.com/2rdzy/nwc4ln/internal/config"
 	"github.com/2rdzy/nwc4ln/internal/node/lnd"
+	"github.com/2rdzy/nwc4ln/internal/nwc"
 	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
 	"github.com/2rdzy/nwc4ln/internal/store"
 	"github.com/2rdzy/nwc4ln/test/integration"
@@ -36,6 +37,7 @@ type service struct {
 	config           string
 	connectionString string
 	second           string // A second app's connection string.
+	adminSecret      string // The admin UI key.
 	cmd              *exec.Cmd
 	log              *os.File
 }
@@ -51,7 +53,12 @@ func startService(t *testing.T, n *integration.Network) *service {
 		t.Fatalf("build: %v: %s", err, out)
 	}
 	path := filepath.Join(dir, "nwc4ln.toml")
-	if out, err := exec.CommandContext(ctx, binary, "init", "--config", path).CombinedOutput(); err != nil {
+	adminSecret, adminKey := nwctest.NewKey()
+	adminNpub, err := nwc.EncodeNpub(adminKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.CommandContext(ctx, binary, "init", "--admin", adminNpub, "--config", path).CombinedOutput(); err != nil {
 		t.Fatalf("init: %v: %s", err, out)
 	}
 	macaroon := filepath.Join(dir, "nwc4ln.macaroon")
@@ -66,6 +73,7 @@ func startService(t *testing.T, n *integration.Network) *service {
 		t.Fatal(err)
 	}
 	cfg := config.Default(dir)
+	cfg.Listen = "127.0.0.1:0" // Any free port: the log names it.
 	cfg.Relay = n.RelayURL()
 	cfg.LNDHost = n.LNDHost(self)
 	cfg.LNDTLSCertPath = filepath.Join(n.LNDDir(self), "tls.cert")
@@ -73,7 +81,7 @@ func startService(t *testing.T, n *integration.Network) *service {
 	if err := config.Write(path, cfg); err != nil {
 		t.Fatal(err)
 	}
-	s := &service{t: t, dir: dir, binary: binary, config: path}
+	s := &service{t: t, dir: dir, binary: binary, config: path, adminSecret: adminSecret}
 	s.connectionString = s.addApp("first")
 	s.second = s.addApp("second")
 	logFile, err := os.Create(filepath.Join(filepath.Dir(dir), "nwc4ln.log"))

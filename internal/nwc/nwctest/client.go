@@ -252,3 +252,22 @@ func (c *Client) CallWith(ctx context.Context, scheme, method string, params any
 		return nil, ctx.Err()
 	}
 }
+
+// NewKey returns a random secret key and its public key, both in hex.
+func NewKey() (secret, public string) {
+	secret = nostr.GeneratePrivateKey()
+	public, _ = nostr.GetPublicKey(secret)
+	return secret, public
+}
+
+// SignEvent returns an event signed with the secret key, in JSON.
+func SignEvent(secret string, kind int, createdAt int64, tags [][]string, content string) ([]byte, error) {
+	event := nostr.Event{Kind: kind, CreatedAt: nostr.Timestamp(createdAt), Content: content}
+	for _, tag := range tags {
+		event.Tags = append(event.Tags, nostr.Tag(tag))
+	}
+	if err := event.Sign(secret); err != nil {
+		return nil, err
+	}
+	return json.Marshal(event)
+}

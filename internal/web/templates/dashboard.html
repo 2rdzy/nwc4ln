@@ -1,0 +1,26 @@
+{{template "head" "nwc4ln: dashboard"}}
+<header>
+<nav><b>nwc4ln</b> <a href="/">Dashboard</a></nav>
+<form method="post" action="/logout"><button type="submit">Log out</button></form>
+</header>
+<main>
+{{if not .Known}}
+<p class="warn" id="unknown"><b>The node cannot be read, so its figures are unknown.</b> Apps refuse to pay until it answers. Reload the page to try again.</p>
+{{else}}
+{{if gt .Overview.ShortfallMsat 0}}
+<p class="warn" id="shortfall"><b>Shortfall: {{sats .Shortfall}}.</b> Sub-wallets and pending payments are owed more than the node can send. Apps are stopped. No balance has been changed. If the money is really lost, withdraw it from sub-wallets to decide who bears the loss.</p>
+{{end}}
+{{if lt .Overview.MainAvailableMsat 0}}
+<p class="note" id="negative">Main wallet available is below 0, so apps cannot pay. A peer may be offline, or funds may have left the node outside nwc4ln.</p>
+{{end}}
+{{end}}
+<h1>Dashboard</h1>
+<table>
+<tr><td>Node spendable (active channels)</td><td class="n" id="node">{{if .Known}}{{sats .NodeSpendable}}{{else}}unknown{{end}}</td></tr>
+<tr><td>Sub-wallet total (deleted ones included until their balance moves)</td><td class="n" id="subwallets">{{if .Known}}{{sats .SubWallets}}{{else}}unknown{{end}}</td></tr>
+<tr><td>Held for pending payments</td><td class="n" id="holds">{{if .Known}}{{sats .Holds}}{{else}}unknown{{end}}</td></tr>
+<tr><th>Main wallet available</th><td class="n" id="main"><b>{{if .Known}}{{sats .MainAvailable}}{{else}}unknown{{end}}</b></td></tr>
+</table>
+<p class="small">Read at {{.ReadAt}}. Reload the page to read again.</p>
+</main>
+{{template "foot"}}
