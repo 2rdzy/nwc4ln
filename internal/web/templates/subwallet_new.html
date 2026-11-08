@@ -1,12 +1,13 @@
 {{template "head" "nwc4ln: add a sub-wallet"}}
-{{template "nav"}}
+{{template "nav" "subwallets"}}
 <main>
+<p class="crumb"><a href="/subwallets">Sub-wallets</a> / new</p>
 <h1>Add a sub-wallet</h1>
 <p class="note" id="custody">Sub-wallets are custodial. Their money stays on this node: you hold it, and you could take it. Tell each holder so. Someone who dislikes that can run their own node.</p>
-<form method="post" action="/subwallets">
-<p><label>Name <input name="name" required maxlength="100"></label></p>
+<form class="card" method="post" action="/subwallets">
+<p class="field"><label>Name <input name="name" required maxlength="100"></label></p>
 <p class="small">It starts with a balance of 0. Fund it from its page. It can pay, make invoices and read its own balance and history: a sub-wallet's permissions cannot be changed.</p>
-<p><button type="submit">Add</button> <a href="/subwallets">Cancel</a></p>
+<p class="actions"><button type="submit">Add</button> <a class="btn ghost" href="/subwallets">Cancel</a></p>
 </form>
 </main>
 {{template "foot"}}

@@ -1,44 +1,61 @@
 {{template "head" "nwc4ln: app"}}
-{{template "nav"}}
+{{template "nav" "apps"}}
 <main>
+<p class="crumb"><a href="/apps">Apps</a> / {{.App.Name}}</p>
+<div class="page-head">
+<div>
 <h1>{{.App.Name}}</h1>
+<p class="muted">Added {{time .App.CreatedAt}} · Last used {{if .App.LastUsedAt.IsZero}}never{{else}}{{time .App.LastUsedAt}}{{end}}</p>
+</div>
+</div>
 {{if .App.Expired .Now}}<p class="note" id="expired">This app has expired. Its connection stops working until you change the last day.</p>{{end}}
-<table>
-<tr><td>Added</td><td>{{time .App.CreatedAt}}</td></tr>
-<tr><td>Last used</td><td>{{if .App.LastUsedAt.IsZero}}never{{else}}{{time .App.LastUsedAt}}{{end}}</td></tr>
+<section class="card">
+<table class="facts">
 <tr><td>Permissions</td><td id="permissions">{{if .App.CanPay}}pay{{else}}no pay{{end}}, {{if .App.CanInvoice}}invoice{{else}}no invoice{{end}}</td></tr>
 <tr><td>Used this period</td><td class="n" id="used">{{sats .App.Used}}</td></tr>
 {{if .App.HasLimit}}
 <tr><td>Limit</td><td class="n" id="limit">{{sats .App.Limit}} {{.App.Renewal}}</td></tr>
 <tr><td>Limit left</td><td class="n" id="left">{{sats .App.Left}}{{if .App.OverLimit}} (used above limit){{end}}</td></tr>
-{{if .App.Budget}}{{if not .App.Budget.RenewsAt.IsZero}}<tr><td>Renews</td><td>{{time .App.Budget.RenewsAt}}</td></tr>{{end}}{{end}}
+{{if .App.Budget}}{{if not .App.Budget.RenewsAt.IsZero}}<tr><td>Renews</td><td class="n">{{time .App.Budget.RenewsAt}}</td></tr>{{end}}{{end}}
 {{else}}
 <tr><td>Limit</td><td class="n" id="limit">no limit</td></tr>
 {{end}}
-<tr><td>Expires</td><td id="expires">{{if .App.ExpiresAt.IsZero}}never{{else}}at the end of {{.App.LastDay}}, UTC{{end}}</td></tr>
+<tr><td>Expires</td><td class="n" id="expires">{{if .App.ExpiresAt.IsZero}}never{{else}}at the end of {{.App.LastDay}}, UTC{{end}}</td></tr>
 </table>
 <p class="small">Used counts settled payments with their fees, and what pending payments hold.</p>
+</section>
 
+<form class="card" method="post" action="/apps/{{.App.ID}}">
 <h2>Settings</h2>
-<form method="post" action="/apps/{{.App.ID}}">
 {{template "settings" .}}
-<p><button type="submit">Save</button> <span class="small">Changes apply to the next request. Pending payments finish as they are.</span></p>
+<p class="actions"><button type="submit">Save</button> <span class="small">Changes apply to the next request. Pending payments finish as they are.</span></p>
 </form>
 
+<section class="card">
 <h2>Transactions</h2>
 {{if .Transactions}}
 <p class="small">The latest {{len .Transactions}} of {{.Total}}, newest first, in every state. <a href="/transactions?account={{.App.ID}}">All of them</a></p>
+<div class="scroll">
 <table id="transactions">
 <tr><th>Created</th><th>Type</th><th>State</th><th class="n">Amount</th><th class="n">Fee</th><th>Description</th></tr>
 {{range .Transactions}}
-<tr><td>{{time .CreatedAt}}</td><td>{{.Type}}{{if .Internal}} (internal){{end}}</td><td>{{.State}}</td><td class="n">{{msat .AmountMsat}}</td><td class="n">{{msat .FeeMsat}}</td><td>{{.Description}}</td></tr>
+<tr><td>{{time .CreatedAt}}</td><td>{{.Type}}{{if .Internal}} (internal){{end}}</td><td>{{template "state" .State}}</td><td class="n">{{msat .AmountMsat}}</td><td class="n">{{msat .FeeMsat}}</td><td>{{.Description}}</td></tr>
 {{end}}
 </table>
+</div>
 {{else}}
 <p id="no-transactions">No transactions yet.</p>
 {{end}}
+</section>
 
+<section class="card">
+<div class="row">
+<div>
 <h2>Delete</h2>
-<p><a href="/apps/{{.App.ID}}/delete">Delete this app</a></p>
+<p class="small">Its connection stops working. You confirm on the next page.</p>
+</div>
+<a class="btn danger" href="/apps/{{.App.ID}}/delete">Delete this app</a>
+</div>
+</section>
 </main>
 {{template "foot"}}

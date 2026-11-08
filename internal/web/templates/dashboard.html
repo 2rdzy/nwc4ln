@@ -1,8 +1,15 @@
 {{template "head" "nwc4ln: dashboard"}}
-{{template "nav"}}
+{{template "nav" "dashboard"}}
 <main>
+<div class="page-head">
+<div>
+<h1>Dashboard</h1>
+<p class="muted">Read at {{.ReadAt}}.</p>
+</div>
+<a class="btn ghost" href="/">Read again</a>
+</div>
 {{if not .Known}}
-<p class="warn" id="unknown"><b>The node cannot be read, so its figures are unknown.</b> Apps refuse to pay until it answers. Reload the page to try again.</p>
+<p class="warn" id="unknown"><b>The node cannot be read, so its figures are unknown.</b> Apps refuse to pay until it answers. Read again to try once more.</p>
 {{else}}
 {{if gt .Overview.ShortfallMsat 0}}
 <p class="warn" id="shortfall"><b>Shortfall: {{sats .Shortfall}}.</b> Sub-wallets and pending payments are owed more than the node can send. Apps are stopped. No balance has been changed. If the money is really lost, withdraw it from sub-wallets to decide who bears the loss.</p>
@@ -11,13 +18,42 @@
 <p class="note" id="negative">Main wallet available is below 0, so apps cannot pay. A peer may be offline, or funds may have left the node outside nwc4ln.</p>
 {{end}}
 {{end}}
-<h1>Dashboard</h1>
-<table>
-<tr><td>Node spendable (active channels)</td><td class="n" id="node">{{if .Known}}{{sats .NodeSpendable}}{{else}}unknown{{end}}</td></tr>
-<tr><td>Sub-wallet total (deleted ones included until their balance moves)</td><td class="n" id="subwallets">{{if .Known}}{{sats .SubWallets}}{{else}}unknown{{end}}</td></tr>
-<tr><td>Held for pending payments</td><td class="n" id="holds">{{if .Known}}{{sats .Holds}}{{else}}unknown{{end}}</td></tr>
-<tr><th>Main wallet available</th><td class="n" id="main"><b>{{if .Known}}{{sats .MainAvailable}}{{else}}unknown{{end}}</b></td></tr>
-</table>
-<p class="small">Read at {{.ReadAt}}. Reload the page to read again.</p>
+
+<section class="hero" aria-label="Main wallet available">
+<div>
+<p class="label">Main wallet available</p>
+<p class="big" id="main"><b>{{if .Known}}{{sats .MainAvailable}}{{else}}unknown{{end}}</b></p>
+<p class="hint">What apps can spend now: node spendable, less sub-wallets and pending holds.</p>
+</div>
+<div class="actions">
+<a class="btn" href="/apps/new">Add an app</a>
+<a class="btn secondary" href="/subwallets/new">Add a sub-wallet</a>
+</div>
+</section>
+
+<div class="grid three">
+<div class="card stat">
+<p class="label">Node spendable</p>
+<p class="value" id="node">{{if .Known}}{{sats .NodeSpendable}}{{else}}unknown{{end}}</p>
+<p class="hint">Active channels only</p>
+</div>
+<div class="card stat">
+<p class="label">Sub-wallet total</p>
+<p class="value" id="subwallets">{{if .Known}}{{sats .SubWallets}}{{else}}unknown{{end}}</p>
+<p class="hint">Deleted ones included until their balance moves</p>
+</div>
+<div class="card stat">
+<p class="label">Held for pending payments</p>
+<p class="value" id="holds">{{if .Known}}{{sats .Holds}}{{else}}unknown{{end}}</p>
+<p class="hint">Released when each payment ends</p>
+</div>
+</div>
+
+{{if .Counted}}
+<div class="grid">
+<a class="card tile" href="/apps" id="app-count"><span class="icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span><span class="text"><b>Apps</b><span>{{.AppCount}} · spend from the main wallet</span></span><span class="go" aria-hidden="true">›</span></a>
+<a class="card tile" href="/subwallets" id="wallet-count"><span class="icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h12"/><circle cx="16.5" cy="13.5" r="1.2"/></svg></span><span class="text"><b>Sub-wallets</b><span>{{.WalletCount}} · own balances, custodial</span></span><span class="go" aria-hidden="true">›</span></a>
+</div>
+{{end}}
 </main>
 {{template "foot"}}

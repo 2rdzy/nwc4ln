@@ -1,10 +1,12 @@
 {{template "head" "nwc4ln: app added"}}
-{{template "nav"}}
+{{template "nav" "apps"}}
 <main>
 <h1>{{.Name}} added</h1>
-<p class="note"><b>This is the only time the connection string is shown.</b> nwc4ln keeps no copy of its secret. Copy it into the app now, or scan the code. Anyone with it can use the app's permissions. Reloading this page adds another app.</p>
+<p class="warn"><b>This is the only time the connection string is shown.</b> nwc4ln keeps no copy of its secret. Copy it into the app now, or scan the code. Anyone with it can use the app's permissions. Reloading this page adds another app.</p>
+<section class="card">
 {{if .QR}}<div id="qr">{{.QR}}</div>{{end}}
 <p><textarea id="connection" readonly rows="5" cols="70">{{.ConnectionString}}</textarea></p>
-<p><a href="/apps">Back to apps</a></p>
+<p><a class="btn ghost" href="/apps">Back to apps</a></p>
+</section>
 </main>
 {{template "foot"}}

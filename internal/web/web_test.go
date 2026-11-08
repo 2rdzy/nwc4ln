@@ -24,10 +24,14 @@ const host = "127.0.0.1:8080"
 type stubLedger struct {
 	overview ledger.Overview
 	err      error
+	reads    atomic.Int64 // Overview calls, each a node read.
 }
 
-func (s *stubLedger) Overview(context.Context) (ledger.Overview, error) { return s.overview, s.err }
-func (s *stubLedger) Apps(context.Context) ([]ledger.App, error)        { return nil, nil }
+func (s *stubLedger) Overview(context.Context) (ledger.Overview, error) {
+	s.reads.Add(1)
+	return s.overview, s.err
+}
+func (s *stubLedger) Apps(context.Context) ([]ledger.App, error) { return nil, nil }
 func (s *stubLedger) AppBudget(context.Context, int64) (*ledger.Budget, error) {
 	return nil, nil
 }

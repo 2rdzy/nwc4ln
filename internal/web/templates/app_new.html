@@ -1,11 +1,12 @@
 {{template "head" "nwc4ln: add an app"}}
-{{template "nav"}}
+{{template "nav" "apps"}}
 <main>
+<p class="crumb"><a href="/apps">Apps</a> / new</p>
 <h1>Add an app</h1>
-<form method="post" action="/apps">
-<p><label>Name <input name="name" required maxlength="100"></label></p>
+<form class="card" method="post" action="/apps">
+<p class="field"><label>Name <input name="name" required maxlength="100"></label></p>
 {{template "settings" .}}
-<p><button type="submit">Add the app</button></p>
+<p class="actions"><button type="submit">Add the app</button> <a class="btn ghost" href="/apps">Cancel</a></p>
 </form>
 </main>
 {{template "foot"}}

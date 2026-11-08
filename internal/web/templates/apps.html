@@ -1,21 +1,30 @@
 {{template "head" "nwc4ln: apps"}}
-{{template "nav"}}
+{{template "nav" "apps"}}
 <main>
+<div class="page-head">
+<div>
 <h1>Apps</h1>
-<p>An app spends from the main wallet, with an optional limit. <a href="/apps/new" id="new">Add an app</a></p>
+<p class="muted">An app spends from the main wallet, with an optional limit.</p>
+</div>
+<a class="btn" href="/apps/new" id="new">Add an app</a>
+</div>
+<section class="card">
 {{if .Apps}}
+<div class="scroll">
 <table id="apps">
 <tr><th>Name</th><th>Last used</th><th class="n">Limit left</th></tr>
 {{range .Apps}}
 <tr>
-<td><a href="/apps/{{.ID}}">{{.Name}}</a>{{if .Expired $.Now}} <span class="small">(expired)</span>{{end}}</td>
+<td><a href="/apps/{{.ID}}">{{.Name}}</a>{{if .Expired $.Now}} <span class="pill">expired</span>{{end}}</td>
 <td>{{if .LastUsedAt.IsZero}}never{{else}}{{time .LastUsedAt}}{{end}}</td>
 <td class="n" id="left-{{.ID}}">{{if .HasLimit}}{{sats .Left}}{{if .OverLimit}} <span class="small">(used above limit)</span>{{end}}{{else}}no limit{{end}}</td>
 </tr>
 {{end}}
 </table>
+</div>
 {{else}}
 <p id="none">No apps yet.</p>
 {{end}}
+</section>
 </main>
 {{template "foot"}}

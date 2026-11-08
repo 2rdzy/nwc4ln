@@ -1,14 +1,14 @@
 {{template "head" "nwc4ln: money moved"}}
-{{template "nav"}}
+{{template "nav" "subwallets"}}
 <main>
 <h1>{{if eq .Action "fund"}}Fund{{else}}Withdraw{{end}}: {{.Wallet.Name}}</h1>
 {{if eq .Row.State "settled"}}
-<p id="result">Done: {{msat .Row.AmountMsat}} {{if eq .Action "fund"}}moved from the main wallet to {{.Wallet.Name}}{{else}}moved from {{.Wallet.Name}} to the main wallet{{end}}.</p>
+<p class="note" id="result">Done: {{msat .Row.AmountMsat}} {{if eq .Action "fund"}}moved from the main wallet to {{.Wallet.Name}}{{else}}moved from {{.Wallet.Name}} to the main wallet{{end}}.</p>
 {{else if eq .Row.State "failed"}}
 <p class="warn" id="result">Nothing moved. The node refused to cancel the invoice used for the move, so it was stopped. The log has the details.</p>
 {{else}}
 <p class="note" id="result">Still pending. It finishes on its own, or fails at the next check with nothing moved. Its row shows the result.</p>
 {{end}}
-<p><a href="/subwallets/{{.Wallet.ID}}">Back to {{.Wallet.Name}}</a></p>
+<p><a class="btn ghost" href="/subwallets/{{.Wallet.ID}}">Back to {{.Wallet.Name}}</a></p>
 </main>
 {{template "foot"}}
