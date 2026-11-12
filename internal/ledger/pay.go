@@ -44,6 +44,12 @@ func (l *Ledger) Pay(ctx context.Context, request PayRequest) (Transaction, erro
 	if err != nil {
 		return Transaction{}, err
 	}
+	if decoded.Destination != l.nodeKey() { // An invoice from this node never goes out.
+		if err := l.checkNotPaid(ctx, decoded.Hash); err != nil {
+			l.work.Done()
+			return Transaction{}, err
+		}
+	}
 	row, err := l.hold(ctx, request, invoice, decoded, amount)
 	if err != nil {
 		l.work.Done()
@@ -54,6 +60,27 @@ func (l *Ledger) Pay(ctx context.Context, request PayRequest) (Transaction, erro
 		nodeAmount = amount
 	}
 	return l.carryOut(ctx, run, row, nodeAmount), nil
+}
+
+// checkNotPaid refuses an invoice the node has paid, or is paying, by any means. The
+// node is the source of truth: the ledger knows only the payments it started, and
+// would otherwise charge an account for money that left with another tool, or that
+// left after the ledger marked its own row failed. It runs before the hold, outside
+// the lock, so a refusal holds nothing.
+func (l *Ledger) checkNotPaid(ctx context.Context, hash string) error {
+	payment, err := l.node.TrackPayment(ctx, hash)
+	if err != nil {
+		return fmt.Errorf("ask the node about the invoice: %w", err)
+	}
+	switch payment.State {
+	case node.PaymentSucceeded:
+		l.log.Error("payment refused: the node has already paid this invoice", "hash", hash)
+		return ErrAlreadyPaid
+	case node.PaymentInFlight:
+		l.log.Warn("payment refused: the node is paying this invoice", "hash", hash)
+		return ErrAlreadyPaid
+	}
+	return nil
 }
 
 // begin counts one payment as running work, if the ledger is running. The caller
@@ -225,7 +252,10 @@ func (l *Ledger) send(ctx context.Context, row Transaction, nodeAmount int64) {
 		Invoice: row.Invoice, AmountMsat: nodeAmount, FeeLimitMsat: row.ReserveMsat, Timeout: payTimeout,
 	})
 	if err == nil && (payment.State == node.PaymentSucceeded || payment.State == node.PaymentFailed) {
-		l.apply(ctx, row, payment) // The node's own answer to this call: always believed.
+		// The node's own answer to this call: always believed. The call is over, so a
+		// sweep may finish this if the write below fails.
+		l.decided(row.ID)
+		l.apply(ctx, row, payment)
 		return
 	}
 	// The error says nothing about the payment. Only the node's record does.
@@ -245,6 +275,17 @@ func (l *Ledger) distrust(id int64) {
 	if attempt, ok := l.attempts[id]; ok {
 		attempt.live = false
 		attempt.trustFrom = l.now().Add(noRecordGrace)
+	}
+}
+
+// decided marks a row's node call as over with a final answer, which can be believed
+// at once.
+func (l *Ledger) decided(id int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if attempt, ok := l.attempts[id]; ok {
+		attempt.live = false
+		attempt.trustFrom = l.now()
 	}
 }
 

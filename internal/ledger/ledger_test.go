@@ -833,16 +833,19 @@ func TestSwappedNodeIsRefused(t *testing.T) {
 }
 
 // Catches: charging the row's amount when the node sent another: the hash was
-// paid by a different tool first.
+// paid by a different tool in the moment after the check before the hold, which
+// TestInvoicePaidOutsideIsRefused covers.
 func TestChargesWhatTheNodeSent(t *testing.T) {
 	e := newEnv(t)
 	e.start()
 	invoice := e.node.OutsideInvoice(0)
-	_, err := e.node.Pay(context.Background(), node.PayRequest{
-		Invoice: invoice, AmountMsat: 1 * sat, FeeLimitMsat: minReserveMsat, Timeout: time.Second,
-	})
-	if err != nil {
-		t.Fatal(err)
+	e.ledger.beforePay = func() {
+		_, err := e.node.Pay(context.Background(), node.PayRequest{
+			Invoice: invoice, AmountMsat: 1 * sat, FeeLimitMsat: minReserveMsat, Timeout: time.Second,
+		})
+		if err != nil {
+			t.Error(err)
+		}
 	}
 	tx, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: invoice, AmountMsat: 900 * sat})
 	if err != nil {

@@ -41,6 +41,9 @@ type Harness struct {
 	ReplaysFromZero bool
 	// NoBlockHash means Info has no block hash.
 	NoBlockHash bool
+	// PayFailureNotFinal means Pay answers a failure with an error, never with
+	// PaymentFailed, as on Core Lightning. TrackPayment decides it.
+	PayFailureNotFinal bool
 }
 
 const (
@@ -333,13 +336,24 @@ func testPayRefusesZeroFeeLimit(t *testing.T, h Harness) {
 	}
 }
 
-// Catches: a payment that can never go out left pending, so its hold stays and the
-// client hears "payment pending" instead of a failure. Both nodes must fail it at once.
+// Catches: a payment that can never go out left pending for ever, so its hold stays.
+// LND fails it at once. Core Lightning answers with an error and no part sent, so
+// tracking it reads no record, which the ledger believes after its wait.
 func testUnroutablePaymentFails(t *testing.T, h Harness) {
 	ctx := t.Context()
 	// More than any test node can send.
-	payment, err := h.Node.Pay(ctx, request(h.OutsideInvoice(t, 3_000_000_000)))
-	if err != nil || payment.State != node.PaymentFailed || payment.Hash == "" {
+	invoice := h.OutsideInvoice(t, 3_000_000_000)
+	payment, err := h.Node.Pay(ctx, request(invoice))
+	if h.PayFailureNotFinal {
+		if err == nil {
+			t.Fatalf("got %+v with no error; want an error", payment)
+		}
+		decoded, err := h.Node.DecodeInvoice(ctx, invoice)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payment.Hash = decoded.Hash
+	} else if err != nil || payment.State != node.PaymentFailed || payment.Hash == "" {
 		t.Fatalf("got %+v, %v; want a final failure", payment, err)
 	}
 	tracked, err := h.Node.TrackPayment(ctx, payment.Hash)

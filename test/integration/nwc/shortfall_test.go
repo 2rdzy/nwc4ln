@@ -145,6 +145,17 @@ func TestInFlightRaisesNoShortfall(t *testing.T) {
 	}
 	select {
 	case row := <-paid:
+		// Core Lightning's failure is final only once no new attempt can come, so the
+		// sweep fails the row a few minutes later (SR1).
+		for deadline := time.Now().Add(5 * time.Minute); row.State == ledger.StatePending && integration.IsCLN(self); {
+			if time.Now().After(deadline) {
+				t.Fatal("the payment stayed pending")
+			}
+			time.Sleep(time.Second)
+			if row, err = money.Lookup(ctx, wallet, hash, ""); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if row.State != ledger.StateFailed {
 			t.Fatalf("payment %+v", row)
 		}

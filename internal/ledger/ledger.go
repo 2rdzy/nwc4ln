@@ -95,6 +95,10 @@ var (
 	// ErrNodeChanged means the node is not the one this ledger belongs to. Its "no
 	// record" answers mean nothing, and believing them would release every hold.
 	ErrNodeChanged = errors.New("node public key differs from the one stored in the ledger")
+	// ErrNodeHistory means the node has the right key but no record of a payment or
+	// invoice the ledger saw settle there, as after a restore from seed or a deletion of
+	// its payments. Its "no record" answers mean nothing either.
+	ErrNodeHistory = errors.New("node has no record of a settled payment or invoice in the ledger")
 )
 
 // Reserve returns the fee reserve for an amount: 1% rounded up, with a 10 sat
@@ -200,11 +204,12 @@ func (l *Ledger) settledInvoice(ctx context.Context, hash string) {
 }
 
 // StartRetrying calls Start until it works or ctx ends. A node that is down is
-// normal at boot. A node that changed is not, so that error comes back at once.
+// normal at boot. A node that changed or lost its history is not, so those errors
+// come back at once.
 func (l *Ledger) StartRetrying(ctx context.Context) error {
 	for {
 		err := l.Start(ctx)
-		if err == nil || errors.Is(err, ErrNodeChanged) {
+		if err == nil || errors.Is(err, ErrNodeChanged) || errors.Is(err, ErrNodeHistory) {
 			return err
 		}
 		if ctx.Err() != nil {
@@ -225,6 +230,9 @@ func (l *Ledger) StartRetrying(ctx context.Context) error {
 // can be called again.
 func (l *Ledger) Start(ctx context.Context) error {
 	if err := l.checkNode(ctx); err != nil {
+		return err
+	}
+	if err := l.checkHistory(ctx); err != nil {
 		return err
 	}
 	if err := l.catchUp(ctx); err != nil {
@@ -262,6 +270,45 @@ func (l *Ledger) checkNode(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.pubKey = info.PubKey
+	return nil
+}
+
+// checkHistory asks the node about the newest payment and the newest invoice that
+// settled there, as the ledger saw them. The key check alone misses a node restored
+// from seed: it keeps its key and loses its history, and then answers "no record" for
+// every pending payment, which would release holds for payments that went out. Only
+// the node's own "no record" refuses. A connection error can be retried. Internal rows
+// never reached the node, so they say nothing about it.
+func (l *Ledger) checkHistory(ctx context.Context) error {
+	var hash string
+	err := l.db.QueryRowContext(ctx, `SELECT payment_hash FROM transactions
+		WHERE type = 'outgoing' AND state = 'settled' AND internal = 0 ORDER BY id DESC LIMIT 1`).Scan(&hash)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return fmt.Errorf("read newest payment: %w", err)
+	default:
+		payment, err := l.node.TrackPayment(ctx, hash)
+		if err != nil {
+			return fmt.Errorf("check node history: %w", err)
+		}
+		if payment.State == node.PaymentNoRecord {
+			return fmt.Errorf("%w: payment %s", ErrNodeHistory, hash)
+		}
+	}
+	err = l.db.QueryRowContext(ctx, `SELECT payment_hash FROM transactions
+		WHERE type = 'incoming' AND state = 'settled' AND internal = 0 ORDER BY id DESC LIMIT 1`).Scan(&hash)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("read newest invoice: %w", err)
+	}
+	if _, err := l.node.LookupInvoice(ctx, hash); errors.Is(err, node.ErrNotFound) {
+		return fmt.Errorf("%w: invoice %s", ErrNodeHistory, hash)
+	} else if err != nil {
+		return fmt.Errorf("check node history: %w", err)
+	}
 	return nil
 }
 
