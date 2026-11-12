@@ -77,6 +77,7 @@ func clnClient(t *testing.T, n *integration.Network, runePath string, options ..
 func clnHarness(n *integration.Network, c node.Node) nodetest.Harness {
 	h := harness(n, c)
 	h.CancelDeletes, h.LookupHidesPreimage, h.ReplaysFromZero, h.NoBlockHash = true, true, true, true
+	h.PayFailureNotFinal = true
 	return h
 }
 
@@ -231,9 +232,11 @@ func testCLNTimeoutThenFailure(t *testing.T, n *integration.Network, c node.Node
 	}
 }
 
-// Catches: funds stuck after a payment the payee fails while Pay still waits. Pay
-// must read xpay's parts and give a final failure, not an error.
-func testCLNPayFails(t *testing.T, n *integration.Network, c node.Node) {
+// Catches: a hold released while xpay may still record a part, and one stuck for
+// ever. When the payee fails the payment while Pay still waits, Pay gives an error,
+// never a final failure: TrackPayment reads in flight until no attempt can come, and
+// failed after that (SR1).
+func testCLNPayFails(t *testing.T, n *integration.Network, c node.Node, runePath string) {
 	request, hash, _ := holdInvoice(t, n, 2_000)
 	done := make(chan struct{})
 	var payment node.Payment
@@ -251,9 +254,14 @@ func testCLNPayFails(t *testing.T, n *integration.Network, c node.Node) {
 	case <-time.After(time.Minute):
 		t.Fatal("Pay did not return")
 	}
-	if err != nil || payment.State != node.PaymentFailed || payment.Hash != hash {
-		t.Fatalf("got %+v, %v; want a final failure", payment, err)
+	if err == nil {
+		t.Fatalf("got %+v with no error; want an error", payment)
 	}
+	if got, err := c.TrackPayment(t.Context(), hash); err != nil || got.State != node.PaymentInFlight {
+		t.Fatalf("right after the failure: %+v, %v; want in flight", got, err)
+	}
+	later := clnClient(t, n, runePath, cln.WithClock(func() time.Time { return time.Now().Add(3 * time.Minute) }))
+	waitState(t, later, hash, node.PaymentFailed)
 }
 
 // Catches: R10 double credit with part of a payment held on the invoice. The
@@ -447,7 +455,7 @@ func TestCLN(t *testing.T) {
 	t.Run("FlightOverOwnChannel", func(t *testing.T) { testFlightOverOwnChannel(t, n, c) })
 	t.Run("TimeoutThenSuccess", func(t *testing.T) { testCLNTimeoutThenSuccess(t, n, c) })
 	t.Run("TimeoutThenFailure", func(t *testing.T) { testCLNTimeoutThenFailure(t, n, c, runePath) })
-	t.Run("PayFails", func(t *testing.T) { testCLNPayFails(t, n, c) })
+	t.Run("PayFails", func(t *testing.T) { testCLNPayFails(t, n, c, runePath) })
 	t.Run("CancelWithHeldPart", func(t *testing.T) { testCLNCancelWithHeldPart(t, n, c) })
 	t.Run("RuneRefusesOthers", func(t *testing.T) { testRuneRefusesOthers(t, n, runePath) })
 	t.Run("Stopped", func(t *testing.T) { testCLNStopped(t, n, c) })

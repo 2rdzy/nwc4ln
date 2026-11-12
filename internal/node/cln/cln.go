@@ -648,12 +648,13 @@ func (c *Client) DecodeInvoice(ctx context.Context, invoice string) (node.Decode
 
 // Pay implements node.Node with xpay.
 //
-// xpay can answer with a failure while other parts are still in flight, and
-// "already paid" is an error too. So after any error from xpay, the parts decide:
-// the payment failed only if no part is pending or complete. Once xpay has
-// answered, it starts no new part (xpay.c checks payment->cmd first), so a payment
-// it refused before sending anything, such as one with no route, has failed, as
-// on LND. Otherwise the error is returned, and the caller asks TrackPayment.
+// Only success is final here. Any error from xpay, a failure included, says
+// nothing the ledger may act on: whether xpay can still start or record a part
+// after it answers depends on how it works inside, which can change with a
+// version. So the caller asks TrackPayment, which counts every part failed as
+// final only once no new attempt can come. A payment with no route therefore
+// reads as pending for a few minutes on Core Lightning, where LND fails it at once
+// (owner, SR1 STOP 1).
 //
 // An invoice from this node is refused before xpay, which would pay it: LND
 // refuses, and the ledger settles those itself (R10).
@@ -686,26 +687,13 @@ func (c *Client) Pay(ctx context.Context, request node.PayRequest) (node.Payment
 		AmountMsat int64  `json:"amount_msat"`
 		SentMsat   int64  `json:"amount_sent_msat"`
 	}
-	err = c.call(ctx, "xpay", params, &reply)
-	if err == nil {
-		return node.Payment{
-			State: node.PaymentSucceeded, Hash: decoded.Hash, Preimage: reply.Preimage,
-			AmountMsat: reply.AmountMsat, FeeMsat: reply.SentMsat - reply.AmountMsat,
-		}, nil
-	}
-	var rpc *RPCError
-	if !errors.As(err, &rpc) || rpc.Code == codeAlreadyPaid {
+	if err := c.call(ctx, "xpay", params, &reply); err != nil {
 		return node.Payment{}, err
 	}
-	// xpay gave up, so it starts no more attempts. Read what its parts did.
-	parts, listErr := c.parts(context.WithoutCancel(ctx), decoded.Hash)
-	if listErr != nil {
-		return node.Payment{}, errors.Join(err, listErr)
-	}
-	if allFailed(parts) {
-		return node.Payment{State: node.PaymentFailed, Hash: decoded.Hash, FailureReason: rpc.Message}, nil
-	}
-	return node.Payment{}, err
+	return node.Payment{
+		State: node.PaymentSucceeded, Hash: decoded.Hash, Preimage: reply.Preimage,
+		AmountMsat: reply.AmountMsat, FeeMsat: reply.SentMsat - reply.AmountMsat,
+	}, nil
 }
 
 type part struct {
@@ -728,17 +716,6 @@ func (c *Client) parts(ctx context.Context, hash string) ([]part, error) {
 		return nil, errors.New("cln: listsendpays: reply has no payments list")
 	}
 	return *reply.Payments, nil
-}
-
-// allFailed is true when no part is pending or complete, including when there are
-// no parts.
-func allFailed(parts []part) bool {
-	for _, p := range parts {
-		if p.Status != sendPayFailed {
-			return false
-		}
-	}
-	return true
 }
 
 // TrackPayment implements node.Node from the payment's parts. Any part that

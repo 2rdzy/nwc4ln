@@ -136,39 +136,26 @@ func sendPays(parts ...part) func(map[string]any) reply {
 
 var request = node.PayRequest{Invoice: "lnbcrt1", FeeLimitMsat: 10_000, Timeout: 50 * time.Second}
 
-// Catches: funds released for a payment that may still settle, and funds held for
-// one that never went out. xpay can give up while other parts are in flight, and
-// "already paid" is an error too, so an error alone must never read as a failed
-// payment. A refusal with no part sent is a failure, as on LND.
-func TestPayReadsPartsAfterAnXpayError(t *testing.T) {
-	now := time.Now().Unix()
+// Catches: funds released for a payment that may still settle. Whether xpay can
+// still start or record a part after it answers depends on its internals, so no
+// error from it is final, not even a refusal before anything was sent: the ledger
+// asks TrackPayment, which waits until no new attempt can come.
+func TestPayErrorIsNeverFinal(t *testing.T) {
 	tests := []struct {
-		name   string
-		xpay   reply
-		parts  []part
-		failed bool
+		name string
+		xpay reply
 	}{
-		{"PartStillPending", rpcErr(203), []part{{Status: "failed", CreatedAt: now}, {Status: "pending", CreatedAt: now}}, false},
-		{"PartSucceeded", rpcErr(203), []part{{Status: "complete", CreatedAt: now}}, false},
-		{"RefusedBeforeSending", rpcErr(205), nil, true},
-		{"AlreadyPaid", rpcErr(codeAlreadyPaid), []part{{Status: "failed", CreatedAt: now}}, false},
-		{"NotAnRPCAnswer", reply{broken: true}, []part{{Status: "failed", CreatedAt: now}}, false},
-		{"EveryPartFailed", rpcErr(203), []part{{Status: "failed", CreatedAt: now}, {Status: "failed", CreatedAt: now}}, true},
+		{"Failed", rpcErr(203)},
+		{"RefusedBeforeSending", rpcErr(205)},
+		{"AlreadyPaid", rpcErr(codeAlreadyPaid)},
+		{"NotAnRPCAnswer", reply{broken: true}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			s, c := newServer(t)
 			payable(s)
 			s.on("xpay", func(map[string]any) reply { return test.xpay })
-			s.on("listsendpays", sendPays(test.parts...))
-			payment, err := c.Pay(t.Context(), request)
-			if test.failed {
-				if err != nil || payment.State != node.PaymentFailed || payment.Hash != payHash {
-					t.Fatalf("got %+v, %v; want failed", payment, err)
-				}
-				return
-			}
-			if err == nil {
+			if payment, err := c.Pay(t.Context(), request); err == nil {
 				t.Fatalf("got %+v with no error", payment)
 			}
 		})
