@@ -58,6 +58,12 @@ const (
 	backoffFirst = time.Second
 	backoffMax   = 30 * time.Second
 
+	// overlapAfterReady is how long the old subscription is still read after the relay
+	// confirms the new one, for events it received just before. overlapLimit closes it
+	// if no confirmation comes.
+	overlapAfterReady = 2 * time.Second
+	overlapLimit      = 10 * time.Second
+
 	sendFor       = 30 * time.Second
 	sendRetry     = 2 * time.Second
 	publishWithin = 7 * time.Second
