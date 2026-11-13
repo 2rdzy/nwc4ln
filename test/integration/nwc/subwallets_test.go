@@ -110,7 +110,7 @@ func TestSubWalletPaysRealFee(t *testing.T) {
 	if err := n.WaitRoutedFrom(ctx, self); err != nil {
 		t.Fatal(err)
 	}
-	_, service := inProcess(t, ctx, n)
+	money, service := inProcess(t, ctx, n)
 
 	connectionString, err := service.AddSubWallet(ctx, "holder")
 	if err != nil {
@@ -203,6 +203,10 @@ func TestSubWalletPaysRealFee(t *testing.T) {
 	}
 	if got, want := balance(), 10_000_000-paid.Fee; got != want {
 		t.Fatalf("balance %d, want %d: the unused reserve must return", got, want)
+	}
+	// The ledger and the real node must agree on every row this test made.
+	if mismatches, err := money.Check(ctx, time.Unix(0, 0)); err != nil || len(mismatches) != 0 {
+		t.Fatalf("check: %v, %v", mismatches, err)
 	}
 }
 
@@ -304,5 +308,9 @@ func TestSubWalletAdminOnRealNode(t *testing.T) {
 	wantMoney(0, before)
 	if response := call(t, replaced, nwctest.NIP44, "get_balance"); response.Error == nil || response.Error.Code != "UNAUTHORIZED" {
 		t.Fatalf("key of a deleted sub-wallet: %+v", response)
+	}
+	// The ledger and the real node must agree on every row this test made.
+	if mismatches, err := money.Check(ctx, time.Unix(0, 0)); err != nil || len(mismatches) != 0 {
+		t.Fatalf("check: %v, %v", mismatches, err)
 	}
 }

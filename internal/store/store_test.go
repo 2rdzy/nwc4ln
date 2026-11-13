@@ -250,3 +250,79 @@ func TestBackupFile(t *testing.T) {
 		t.Fatalf("failed backup left a file: %v", err)
 	}
 }
+
+// Catches: an upgrade from the first schema that breaks or loses the ledger: the
+// database a running node already has must gain the alerts table and keep its rows.
+func TestUpgradeFromFirstSchema(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+	first, err := migrations.ReadFile("migrations/0001_init.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, FileMode); err != nil {
+		t.Fatal(err)
+	}
+	dsn, err := dataSource(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(ctx, old, fstest.MapFS{"0001_init.sql": {Data: first}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`INSERT INTO settings VALUES ('marker', 'kept')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if got, want := version(t, db.DB), migrationCount(t); got != want {
+		t.Fatalf("version %d, want %d", got, want)
+	}
+	var marker string
+	if err := db.DB.QueryRow(`SELECT value FROM settings WHERE key = 'marker'`).Scan(&marker); err != nil || marker != "kept" {
+		t.Fatalf("marker %q, %v", marker, err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO alerts (kind, key, message, created_at) VALUES ('k', 'x', 'm', 1)`); err != nil {
+		t.Fatalf("no alerts table: %v", err)
+	}
+}
+
+// Catches: check writing to a database the service has open, or reading one this
+// binary cannot read.
+func TestOpenReadOnly(t *testing.T) {
+	db, path := newStore(t)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := OpenReadOnly(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if _, err := reader.DB.Exec(`INSERT INTO settings VALUES ('x', 'y')`); err == nil {
+		t.Fatal("a read-only store accepted a write")
+	}
+	writer, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.DB.Exec(`PRAGMA user_version = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenReadOnly(context.Background(), path); err == nil {
+		t.Fatal("opened a database with another schema version")
+	}
+}

@@ -51,6 +51,7 @@ type Node struct {
 	now         func() time.Time
 	changed     chan struct{} // Closed and replaced on each settlement or outage.
 	unreachable bool
+	notSynced   bool
 	spendable   node.Spendable
 	routeFee    int64
 	nextIndex   uint64
@@ -84,6 +85,13 @@ func (n *Node) SetUnreachable(unreachable bool) {
 	defer n.mu.Unlock()
 	n.unreachable = unreachable
 	n.wake()
+}
+
+// SetSynced sets whether Info reports the node synced to the chain.
+func (n *Node) SetSynced(synced bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.notSynced = !synced
 }
 
 // SetClock sets the clock that stamps invoices, for a test that moves time. Call it
@@ -247,7 +255,7 @@ func (n *Node) Info(ctx context.Context) (node.Info, error) {
 	defer n.mu.Unlock()
 	return node.Info{
 		PubKey: pubKey, Alias: "fake", Color: "#000000", Network: "regtest",
-		BlockHeight: 1, BlockHash: "00", Synced: true,
+		BlockHeight: 1, BlockHash: "00", Synced: !n.notSynced,
 	}, nil
 }
 
