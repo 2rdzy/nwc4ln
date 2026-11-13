@@ -487,6 +487,7 @@ func TestHistoryStaysWithItsAccount(t *testing.T) {
 // Catches: a wrong page, a wrong filter, and a page too big to encrypt.
 func TestListTransactions(t *testing.T) {
 	e := newEnv(t)
+	e.service.invoiceBurst = 1_000
 	start := e.now.Load()
 	var hashes []any
 	for range maxPage + 3 {

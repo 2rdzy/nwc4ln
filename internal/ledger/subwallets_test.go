@@ -414,3 +414,42 @@ func TestDescriptionCap(t *testing.T) {
 		}
 	}
 }
+
+// Catches: an expiry so short the open-invoice cap never binds, or so long the invoice
+// is looked up for weeks, and a valid one refused.
+func TestInvoiceExpiryBounds(t *testing.T) {
+	e := newEnv(t)
+	e.start()
+	for seconds, ok := range map[int64]bool{0: true, 59: false, 60: true, 7 * 24 * 3600: true, 7*24*3600 + 1: false, -1: false} {
+		_, err := e.ledger.MakeInvoice(context.Background(),
+			InvoiceRequest{AccountID: e.acct, AmountMsat: sat, ExpirySeconds: seconds})
+		if ok && err != nil || !ok && !errors.Is(err, ErrBadExpiry) {
+			t.Errorf("expiry %d: %v", seconds, err)
+		}
+	}
+}
+
+// Catches: invoices with a short expiry made without end, because expired ones do not
+// count as open.
+func TestDailyInvoiceCap(t *testing.T) {
+	e := newEnv(t)
+	e.start()
+	e.ledger.maxDailyInvoices = 3
+	make := func() error {
+		_, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: e.acct, AmountMsat: sat, ExpirySeconds: 60})
+		e.advance(61 * time.Second) // Each one has expired before the next.
+		return err
+	}
+	for i := range 3 {
+		if err := make(); err != nil {
+			t.Fatalf("invoice %d: %v", i, err)
+		}
+	}
+	if err := make(); !errors.Is(err, ErrTooManyInvoices) {
+		t.Fatalf("fourth in a day: %v", err)
+	}
+	e.advance(24 * time.Hour)
+	if err := make(); err != nil {
+		t.Fatalf("a day later: %v", err)
+	}
+}

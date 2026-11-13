@@ -112,6 +112,10 @@ func (e *env) restartOn(n node.Node) {
 	}
 }
 
+// waitRefusal moves the clock past the wait between two UNAUTHORIZED replies to one
+// connection.
+func (e *env) waitRefusal() { e.now.Add(int64(refusalEvery / time.Second)) }
+
 func (e *env) timestamp() nostr.Timestamp { return nostr.Timestamp(e.now.Load()) }
 
 func (e *env) request(scheme, method string, tags ...nostr.Tag) *nostr.Event {
@@ -390,6 +394,7 @@ func TestRevokedConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, method := range []string{"get_info", "no_such_method"} {
+		e.waitRefusal()
 		response := e.answer(e.request(nwctest.NIP44, method), nwctest.NIP44)
 		wantCode(t, response, codeUnauthorized)
 		if response.ResultType != method {

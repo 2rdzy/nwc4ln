@@ -42,6 +42,13 @@ const (
 	// maxOpenInvoices caps the unexpired, unpaid invoices of one account. Each one
 	// costs a node call on every pass over pending invoices.
 	maxOpenInvoices = 1_000
+	// maxDailyInvoices caps the invoices one account makes in any 24 hours, because a
+	// short expiry keeps the open cap from binding. An honest wallet never reaches it.
+	maxDailyInvoices = 1_000
+	// minInvoiceExpiry and maxInvoiceExpiry bound the expiry a client may ask for. A
+	// shorter one dodges the open cap, and a longer one costs node calls for a week.
+	minInvoiceExpiry = 60 * time.Second
+	maxInvoiceExpiry = 7 * 24 * time.Hour
 
 	// payTimeout is how long the node keeps trying new routes. It is below the
 	// 60 seconds a client waits, so a payment with no route fails in that time.
@@ -81,7 +88,10 @@ var (
 	ErrInvoiceExpired      = errors.New("invoice has expired")
 	// ErrDescriptionTooLong means a description does not fit in an invoice.
 	ErrDescriptionTooLong = errors.New("description is too long")
-	// ErrTooManyInvoices means the account has too many open invoices.
+	// ErrBadExpiry means an invoice expiry outside the allowed range.
+	ErrBadExpiry = errors.New("invoice expiry must be from 60 seconds to 7 days")
+	// ErrTooManyInvoices means the account has too many open invoices, or made too many
+	// in the last 24 hours.
 	ErrTooManyInvoices = errors.New("too many open invoices")
 	// ErrNotFound means the account has no transaction that matches.
 	ErrNotFound = errors.New("transaction not found")
@@ -124,8 +134,8 @@ type Ledger struct {
 	retryEvery   time.Duration
 	catchUpEvery time.Duration
 	beforePay    func() // Runs after the hold is stored, before the node call.
-	// maxOpenInvoices is the constant of the same name.
-	maxOpenInvoices int
+	// maxOpenInvoices and maxDailyInvoices are the constants of the same names.
+	maxOpenInvoices, maxDailyInvoices int
 	// afterNodeRead runs between the node read and the checks that use its figure.
 	afterNodeRead func()
 
@@ -165,8 +175,8 @@ func New(db *store.Store, n node.Node, log *slog.Logger) *Ledger {
 	return &Ledger{
 		db: db.DB, node: n, log: log,
 		now: time.Now, sweepEvery: sweepEvery, retryEvery: retryEvery, catchUpEvery: catchUpEvery,
-		maxOpenInvoices: maxOpenInvoices,
-		attempts:        map[int64]*attempt{},
+		maxOpenInvoices: maxOpenInvoices, maxDailyInvoices: maxDailyInvoices,
+		attempts: map[int64]*attempt{},
 	}
 }
 

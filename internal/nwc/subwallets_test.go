@@ -122,6 +122,7 @@ func TestAppFunctionsLeaveSubWalletsAlone(t *testing.T) {
 // write nothing and reach no node, and other connections are not affected.
 func TestRateLimit(t *testing.T) {
 	e := newEnv(t)
+	e.service.invoiceBurst = 1_000 // This test is about the general rate.
 	flood := e.addSubWallet("flood")
 	rows := func() int {
 		var count int
@@ -230,6 +231,7 @@ func TestReplaceConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantCode(t, e.call(old, "get_balance", nil), codeUnauthorized)
+	e.waitRefusal()
 	wantCode(t, e.call(old, "pay_invoice", map[string]any{"invoice": e.node.OutsideInvoice(sat)}), codeUnauthorized)
 	replaced, err := nwctest.Parse(connectionString)
 	if err != nil {
@@ -287,6 +289,7 @@ func TestDeleteSubWalletRevokesAtOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantCode(t, e.call(wallet, "get_balance", nil), codeUnauthorized)
+	e.waitRefusal()
 	wantCode(t, e.call(wallet, "make_invoice", map[string]any{"amount": sat}), codeUnauthorized)
 	for _, c := range e.service.connectionList() {
 		if c.accountID == account && !c.revoked {

@@ -105,6 +105,7 @@ func TestUnauthorizedOnEveryMethod(t *testing.T) {
 		e := newEnv(t)
 		e.edit(func(s *ledger.AppSettings) { s.ExpiresAt = time.Now().Add(-time.Hour) })
 		for method, params := range e.everyMethod() {
+			e.waitRefusal()
 			wantCode(t, e.call(e.client, method, params), codeUnauthorized)
 		}
 	})
@@ -114,6 +115,7 @@ func TestUnauthorizedOnEveryMethod(t *testing.T) {
 			t.Fatal(err)
 		}
 		for method, params := range e.everyMethod() {
+			e.waitRefusal()
 			wantCode(t, e.call(e.client, method, params), codeUnauthorized)
 		}
 		var revoked bool

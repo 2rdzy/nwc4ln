@@ -196,7 +196,9 @@ func (s *Service) refused(command string, err error) *Error {
 	case errors.Is(err, ledger.ErrInsufficientBalance):
 		return &Error{Code: codeInsufficientBalance, Message: "not enough funds, including the fee reserve"}
 	case errors.Is(err, ledger.ErrTooManyInvoices):
-		return &Error{Code: codeRateLimited, Message: "too many open invoices, wait for some to expire"}
+		return &Error{Code: codeRateLimited, Message: "too many invoices, wait for some to expire or be paid"}
+	case errors.Is(err, ledger.ErrBadExpiry):
+		message = "expiry must be from 60 seconds to 7 days"
 	case errors.Is(err, ledger.ErrDescriptionTooLong):
 		message = "description is too long"
 	case errors.Is(err, ledger.ErrAlreadyPaid):

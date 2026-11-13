@@ -32,6 +32,10 @@ func (l *Ledger) MakeInvoice(ctx context.Context, request InvoiceRequest) (Trans
 	if len(request.Description) > MaxDescriptionBytes {
 		return Transaction{}, ErrDescriptionTooLong
 	}
+	if expiry := time.Duration(request.ExpirySeconds) * time.Second; request.ExpirySeconds != 0 &&
+		(request.ExpirySeconds < 0 || expiry < minInvoiceExpiry || expiry > maxInvoiceExpiry) {
+		return Transaction{}, ErrBadExpiry
+	}
 	settings, err := l.checkAccount(ctx, l.db, request.AccountID)
 	if err != nil {
 		return Transaction{}, err
@@ -60,19 +64,23 @@ func (l *Ledger) MakeInvoice(ctx context.Context, request InvoiceRequest) (Trans
 	return row, nil
 }
 
-// checkOpenInvoices refuses a new invoice if the account has too many open. An
-// expired invoice is not open, even while its row is pending. The count comes before
-// the node call, so requests running at once can pass it by a few. The rate limit in
-// internal/nwc bounds how many.
+// checkOpenInvoices refuses a new invoice if the account has too many open, or made
+// too many in the last 24 hours. An expired invoice is not open, even while its row
+// is pending, so the daily count is what bounds invoices with a short expiry. The
+// counts come before the node call, so requests running at once can pass them by a
+// few. The rate limit in internal/nwc bounds how many.
 func (l *Ledger) checkOpenInvoices(ctx context.Context, accountID int64) error {
-	var open int
-	err := l.db.QueryRowContext(ctx, `SELECT count(*) FROM transactions
-		WHERE account_id = ? AND type = 'incoming' AND state = 'pending' AND expires_at > ?`,
-		accountID, l.now().Unix()).Scan(&open)
+	now := l.now()
+	var open, today int
+	err := l.db.QueryRowContext(ctx, `SELECT
+			count(CASE WHEN state = 'pending' AND expires_at > ? THEN 1 END),
+			count(CASE WHEN created_at > ? THEN 1 END)
+		FROM transactions WHERE account_id = ? AND type = 'incoming'`,
+		now.Unix(), now.Add(-24*time.Hour).Unix(), accountID).Scan(&open, &today)
 	if err != nil {
 		return err
 	}
-	if open >= l.maxOpenInvoices {
+	if open >= l.maxOpenInvoices || today >= l.maxDailyInvoices {
 		return ErrTooManyInvoices
 	}
 	return nil
