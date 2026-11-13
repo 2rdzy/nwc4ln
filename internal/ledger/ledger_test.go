@@ -1,14 +1,12 @@
 package ledger
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log/slog"
 	"math"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -787,10 +785,8 @@ func TestReadFailureAfterHoldIsPending(t *testing.T) {
 }
 
 // Catches: a success lost in silence when the row has failed already.
-func TestSuccessOnFailedRowIsLogged(t *testing.T) {
+func TestSuccessOnFailedRowRaisesAlert(t *testing.T) {
 	e := newEnv(t)
-	var logged bytes.Buffer
-	e.ledger.log = slog.New(slog.NewTextHandler(&logged, nil))
 	e.start()
 	invoice := e.node.OutsideInvoice(5 * sat)
 	e.ledger.beforePay = func() {
@@ -802,8 +798,9 @@ func TestSuccessOnFailedRowIsLogged(t *testing.T) {
 	if tx.State != StateFailed {
 		t.Fatalf("state: %s", tx.State)
 	}
-	if !strings.Contains(logged.String(), "node paid a payment the ledger failed") {
-		t.Fatalf("log: %s", logged.String())
+	alerts, err := e.ledger.Alerts(context.Background())
+	if err != nil || len(alerts) != 1 || alerts[0].Kind != AlertPaidAfterFailed {
+		t.Fatalf("alerts %+v, %v", alerts, err)
 	}
 }
 

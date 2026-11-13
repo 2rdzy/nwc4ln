@@ -74,7 +74,16 @@ func (l *Ledger) checkNotPaid(ctx context.Context, hash string) error {
 	}
 	switch payment.State {
 	case node.PaymentSucceeded:
-		l.log.Error("payment refused: the node has already paid this invoice", "hash", hash)
+		l.log.Warn("payment refused: the node has already paid this invoice", "hash", hash)
+		var failed int
+		if err := l.db.QueryRowContext(ctx, `SELECT count(*) FROM transactions
+			WHERE payment_hash = ? AND type = 'outgoing' AND state = 'failed'`, hash).Scan(&failed); err != nil {
+			return err
+		}
+		if failed > 0 {
+			l.raise(ctx, l.db, AlertPaidAfterFailed, hash,
+				"The node paid "+hash+", which the ledger marked failed. No account was charged for it.")
+		}
 		return ErrAlreadyPaid
 	case node.PaymentInFlight:
 		l.log.Warn("payment refused: the node is paying this invoice", "hash", hash)
@@ -180,6 +189,9 @@ func (l *Ledger) hold(
 	if !internal {
 		if decoded.Destination == l.nodeKey() {
 			return Transaction{}, ErrOwnInvoice
+		}
+		if !l.NodeSynced() {
+			return Transaction{}, ErrNodeNotSynced
 		}
 		reserve = Reserve(amount)
 	}
@@ -347,11 +359,14 @@ func (l *Ledger) apply(ctx context.Context, row Transaction, payment node.Paymen
 func (l *Ledger) applySuccess(ctx context.Context, row Transaction, payment node.Payment) error {
 	amount := row.AmountMsat
 	if payment.AmountMsat != 0 && payment.AmountMsat != amount {
-		l.log.Error("node sent a different amount", "hash", row.PaymentHash, "row", amount, "node", payment.AmountMsat)
+		l.raise(ctx, l.db, AlertAmountDiffers, row.PaymentHash, fmt.Sprintf(
+			"The node sent %d msat for %s, the ledger held %d msat. The account was charged what the node sent.",
+			payment.AmountMsat, row.PaymentHash, amount))
 		amount = payment.AmountMsat
 	}
 	if payment.FeeMsat > row.ReserveMsat {
-		l.log.Error("fee above the reserve", "hash", row.PaymentHash, "fee", payment.FeeMsat, "reserve", row.ReserveMsat)
+		l.raise(ctx, l.db, AlertFeeAboveReserve, row.PaymentHash, fmt.Sprintf(
+			"The fee for %s was %d msat, above its %d msat reserve.", row.PaymentHash, payment.FeeMsat, row.ReserveMsat))
 	}
 	l.holdLock.Lock()
 	moved, err := settleOutgoing(ctx, l.db, row.ID, amount, payment.FeeMsat, payment.Preimage, l.now())
@@ -368,7 +383,9 @@ func (l *Ledger) applySuccess(ctx context.Context, row Transaction, payment node
 		return err
 	}
 	if current.State == StateFailed {
-		l.log.Error("node paid a payment the ledger failed", "hash", row.PaymentHash, "amount", amount)
+		l.raise(ctx, l.db, AlertPaidAfterFailed, row.PaymentHash, fmt.Sprintf(
+			"The node paid %d msat for %s, which the ledger marked failed. No account was charged for it.",
+			amount, row.PaymentHash))
 	}
 	return nil
 }

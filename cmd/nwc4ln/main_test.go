@@ -411,3 +411,35 @@ func TestFileModes(t *testing.T) {
 		})
 	}
 }
+
+// Catches: check refusing to run beside the service, which holds the data folder
+// lock, or changing the database it reads. Here the node does not answer, so check
+// must fail on the node and say so.
+func TestCheckRunsBesideTheService(t *testing.T) {
+	dir := dataDir(t)
+	path := filepath.Join(dir, "nwc4ln.toml")
+	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	writeServiceConfig(t, path, "ws://127.0.0.1:1")
+	release, err := store.Lock(dir) // The service is running.
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = release() }()
+	database := filepath.Join(dir, databaseName)
+	before, err := os.ReadFile(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	err = run(ctx, []string{"check", "--all", "--config", path}, io.Discard)
+	if err == nil || errors.Is(err, store.ErrLocked) || !strings.Contains(err.Error(), "node") {
+		t.Fatalf("got %v, want a node error", err)
+	}
+	after, err := os.ReadFile(database)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("check changed the database: %v", err)
+	}
+}

@@ -96,6 +96,45 @@ func open(ctx context.Context, path string) (*Store, error) {
 	return &Store{DB: db}, nil
 }
 
+// OpenReadOnly opens an existing database for reading only, with no migrations, so
+// a reader such as check never changes a database the service has open. It fails if
+// the schema is not the one this binary knows.
+func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("database path: %w", err)
+	}
+	query := url.Values{"mode": {"ro"}}
+	query.Add("_pragma", "busy_timeout(5000)")
+	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: abs, RawQuery: query.Encode()}).String())
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	files, err := migrationFiles(must(fs.Sub(migrations, "migrations")))
+	if err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	var version int
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return nil, errors.Join(fmt.Errorf("read schema version: %w", err), db.Close())
+	}
+	if version != len(files) {
+		return nil, errors.Join(fmt.Errorf("database schema version %d, this binary knows %d: start the service once first",
+			version, len(files)), db.Close())
+	}
+	return &Store{DB: db}, nil
+}
+
+func must[T any](value T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
 // Close closes the database. A clean close also removes the WAL file.
 func (s *Store) Close() error {
 	return s.DB.Close()

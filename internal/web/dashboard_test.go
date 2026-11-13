@@ -88,3 +88,27 @@ func TestDashboardMatchesLedger(t *testing.T) {
 	n.SetUnreachable(true)
 	show(map[string]string{"node": "unknown", "subwallets": "unknown", "holds": "unknown", "main": "unknown"}, "unknown")
 }
+
+// Catches: an alert the admin cannot see or close, or a node behind the chain that
+// the dashboard does not mention.
+func TestDashboardAlertsAndSync(t *testing.T) {
+	stub := &stubLedger{
+		alerts:    []ledger.Alert{{ID: 7, Kind: ledger.AlertShortfall, Message: "short <b>"}},
+		notSynced: true,
+	}
+	e := newEnv(t, stub)
+	cookie := e.login()
+	page := body(t, e.do(http.MethodGet, "/", withCookie(cookie)))
+	for _, want := range []string{`id="alerts"`, "short &lt;b&gt;", `action="/alerts/7/close"`, `id="not-synced"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("dashboard lacks %q", want)
+		}
+	}
+	response := e.do(http.MethodPost, "/alerts/7/close", withCookie(cookie))
+	if response.StatusCode != http.StatusSeeOther || stub.closed != 7 {
+		t.Fatalf("close: %d, closed %d", response.StatusCode, stub.closed)
+	}
+	if response := e.do(http.MethodPost, "/alerts/x/close", withCookie(cookie)); response.StatusCode != http.StatusNotFound {
+		t.Fatalf("bad id: %d", response.StatusCode)
+	}
+}

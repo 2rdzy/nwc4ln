@@ -8,6 +8,23 @@
 </div>
 <a class="btn ghost" href="/">Read again</a>
 </div>
+{{if not .Synced}}
+<p class="warn" id="not-synced"><b>The node is catching up with the chain.</b> Payments that leave the node are paused until it is synced. Receiving, and payments between accounts, go on.</p>
+{{end}}
+{{if not .AlertsKnown}}
+<p class="warn" id="alerts-unknown">The alerts could not be read. The log has the details.</p>
+{{else if .Alerts}}
+<section class="card" id="alerts" aria-label="Alerts">
+<h2>Alerts</h2>
+<p class="small">The ledger and the node disagree about money, or a shortfall lasts. Nothing was changed by itself: check each one, then close it.</p>
+{{range .Alerts}}
+<div class="row alert">
+<p class="warn"><b>{{.Kind}}</b> · {{time .CreatedAt}}<br>{{.Message}}</p>
+<form method="post" action="/alerts/{{.ID}}/close"><button type="submit" class="ghost">Close</button></form>
+</div>
+{{end}}
+</section>
+{{end}}
 {{if not .Known}}
 <p class="warn" id="unknown"><b>The node cannot be read, so its figures are unknown.</b> Apps refuse to pay until it answers. Read again to try once more.</p>
 {{else}}

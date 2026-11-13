@@ -221,7 +221,9 @@ func (l *Ledger) storeCredit(ctx context.Context, invoice node.Invoice, storeInd
 			return false, err
 		}
 		if count > 0 {
-			l.log.Warn("outside payment on a closed invoice, left in the main wallet", "hash", invoice.Hash)
+			l.raise(ctx, tx, AlertIncomeOnClosed, invoice.Hash, fmt.Sprintf(
+				"%d msat arrived at the node on %s, an invoice already closed in the ledger. It counts as main wallet.",
+				invoice.PaidMsat, invoice.Hash))
 		}
 	}
 	if storeIndex {

@@ -22,16 +22,25 @@ const host = "127.0.0.1:8080"
 
 // stubLedger returns a fixed overview, or an error.
 type stubLedger struct {
-	overview ledger.Overview
-	err      error
-	reads    atomic.Int64 // Overview calls, each a node read.
+	overview  ledger.Overview
+	err       error
+	reads     atomic.Int64 // Overview calls, each a node read.
+	alerts    []ledger.Alert
+	notSynced bool
+	closed    int64
 }
 
 func (s *stubLedger) Overview(context.Context) (ledger.Overview, error) {
 	s.reads.Add(1)
 	return s.overview, s.err
 }
-func (s *stubLedger) Apps(context.Context) ([]ledger.App, error) { return nil, nil }
+func (s *stubLedger) Apps(context.Context) ([]ledger.App, error)     { return nil, nil }
+func (s *stubLedger) Alerts(context.Context) ([]ledger.Alert, error) { return s.alerts, nil }
+func (s *stubLedger) CloseAlert(_ context.Context, id int64) error {
+	s.closed = id
+	return nil
+}
+func (s *stubLedger) NodeSynced() bool { return !s.notSynced }
 func (s *stubLedger) AppBudget(context.Context, int64) (*ledger.Budget, error) {
 	return nil, nil
 }

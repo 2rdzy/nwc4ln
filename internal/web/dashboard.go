@@ -12,7 +12,12 @@ import (
 const msatPerSat = 1_000
 
 type dashboardData struct {
-	Known    bool // False if the node could not be read.
+	Known bool // False if the node could not be read.
+	// Alerts are the open alerts. AlertsKnown is false if they could not be read.
+	Alerts      []ledger.Alert
+	AlertsKnown bool
+	// Synced is the node's last answer about the chain.
+	Synced   bool
 	Overview ledger.Overview
 	ReadAt   string
 	// Counted is false if the database could not list apps and sub-wallets.
@@ -39,6 +44,12 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		data.Known, data.Overview = true, overview
 	}
 	s.noteRead(now, err == nil)
+	data.Synced = s.ledger.NodeSynced()
+	if alerts, err := s.ledger.Alerts(r.Context()); err != nil {
+		s.log.Warn("dashboard: alerts unknown", "error", err)
+	} else {
+		data.Alerts, data.AlertsKnown = alerts, true
+	}
 	apps, appsErr := s.ledger.Apps(r.Context())
 	wallets, walletsErr := s.ledger.SubWallets(r.Context())
 	if err := errors.Join(appsErr, walletsErr); err != nil {
@@ -82,4 +93,23 @@ func formatSats(sats int64) string {
 		out = append(out, digits[i])
 	}
 	return sign + string(out) + " sat"
+}
+
+// closeAlert hides one alert, then goes back to the dashboard.
+func (s *Server) closeAlert(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err == nil {
+		err = s.ledger.CloseAlert(r.Context(), id)
+	} else {
+		err = ledger.ErrNotFound
+	}
+	if errors.Is(err, ledger.ErrNotFound) {
+		s.problem(w, http.StatusNotFound, "There is no such open alert.")
+		return
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

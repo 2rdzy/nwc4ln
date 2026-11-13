@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/2rdzy/nwc4ln/internal/config"
 	"github.com/2rdzy/nwc4ln/internal/ledger"
@@ -28,7 +29,8 @@ const (
 	databaseName = "nwc4ln.db"
 	dataDirMode  = 0o700
 	usage        = "usage: nwc4ln init [--admin npub] [--config path], nwc4ln start [--config path], " +
-		"nwc4ln backup [--config path] <file>, or nwc4ln set-admin [--config path] <npub>"
+		"nwc4ln backup [--config path] <file>, nwc4ln check [--all] [--config path], " +
+		"or nwc4ln set-admin [--config path] <npub>"
 )
 
 func main() {
@@ -50,6 +52,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	flags.SetOutput(out)
 	configPath := flags.String("config", "", "config file (default ~/.nwc4ln/nwc4ln.toml)")
 	admin := flags.String("admin", "", "the admin's npub (init)")
+	all := flags.Bool("all", false, "check every row, not only the last 7 days (check)")
 	if err := flags.Parse(rest); err != nil {
 		return err
 	}
@@ -76,6 +79,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return runInit(ctx, path, *admin, out)
 	case "start":
 		return runStart(ctx, path, out)
+	case "check":
+		return runCheck(ctx, path, *all, out)
 	case "backup":
 		return runBackup(ctx, path, flags.Arg(0), out)
 	case "set-admin":
@@ -248,6 +253,45 @@ func runStart(ctx context.Context, configPath string, out io.Writer) (err error)
 		service.Run(ctx)
 	}
 	fmt.Fprintln(out, "stopped")
+	return nil
+}
+
+// checkLookBack is how far back check looks without --all.
+const checkLookBack = 7 * 24 * time.Hour
+
+// runCheck compares the ledger with the node and prints each mismatch. It only reads,
+// and takes no lock, so it runs beside the service. Any mismatch is an error, so the
+// exit code says whether the ledger and the node agree.
+func runCheck(ctx context.Context, configPath string, all bool, out io.Writer) (err error) {
+	cfg, err := loadChecked(configPath)
+	if err != nil {
+		return err
+	}
+	db, err := store.OpenReadOnly(ctx, filepath.Join(cfg.DataDir, databaseName))
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	client, err := newNode(cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, client.Close()) }()
+	since := time.Now().Add(-checkLookBack)
+	if all {
+		since = time.Unix(0, 0)
+	}
+	mismatches, err := ledger.New(db, client, slog.Default()).Check(ctx, since)
+	if err != nil {
+		return err
+	}
+	for _, m := range mismatches {
+		fmt.Fprintln(out, m)
+	}
+	if len(mismatches) > 0 {
+		return fmt.Errorf("%d mismatches between the ledger and the node", len(mismatches))
+	}
+	fmt.Fprintln(out, "the ledger and the node agree")
 	return nil
 }
 

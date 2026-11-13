@@ -105,6 +105,9 @@ var (
 	// ErrNodeChanged means the node is not the one this ledger belongs to. Its "no
 	// record" answers mean nothing, and believing them would release every hold.
 	ErrNodeChanged = errors.New("node public key differs from the one stored in the ledger")
+	// ErrNodeNotSynced means the node is behind the chain, so a payment that leaves the
+	// node is refused: it could get wrong deadlines. Payments between accounts go on.
+	ErrNodeNotSynced = errors.New("the node is catching up with the chain")
 	// ErrNodeHistory means the node has the right key but no record of a payment or
 	// invoice the ledger saw settle there, as after a restore from seed or a deletion of
 	// its payments. Its "no record" answers mean nothing either.
@@ -157,6 +160,13 @@ type Ledger struct {
 	work     sync.WaitGroup
 	pubKey   string    // The node's key, set by Start.
 	nextPass time.Time // When a sweep next checks pending invoices.
+	// notSynced is the node's last answer: behind the chain. Read on every sweep.
+	notSynced bool
+	// shortfallSince is when the current shortfall began, or zero.
+	shortfallSince time.Time
+	// nextShortfall and nextCheck are when the sweep next watches the shortfall and
+	// runs the regular check.
+	nextShortfall, nextCheck time.Time
 }
 
 // attempt is what this process knows about a payment it started. A row with no
@@ -258,6 +268,7 @@ func (l *Ledger) Start(ctx context.Context) error {
 	}
 	l.run, l.stop = context.WithCancel(context.Background())
 	l.nextPass = l.now().Add(l.catchUpEvery)
+	l.nextShortfall, l.nextCheck = l.now(), l.now() // Both on the first sweep.
 	l.work.Go(func() { l.subscribe(l.run) })
 	l.work.Go(func() { l.sweepLoop(l.run) })
 	return nil
@@ -280,6 +291,29 @@ func (l *Ledger) checkNode(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.pubKey = info.PubKey
+	l.notSynced = !info.Synced
+	return nil
+}
+
+// NodeSynced reports the node's last answer about the chain.
+func (l *Ledger) NodeSynced() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return !l.notSynced
+}
+
+// readSynced asks the node whether it is synced to the chain.
+func (l *Ledger) readSynced(ctx context.Context) error {
+	info, err := l.node.Info(ctx)
+	if err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.notSynced != !info.Synced {
+		l.log.Warn("node sync changed", "synced", info.Synced)
+	}
+	l.notSynced = !info.Synced
 	return nil
 }
 
@@ -363,7 +397,14 @@ func (l *Ledger) sweep(ctx context.Context) error {
 	}
 	trackErr := l.trackPending(ctx)
 	// After the payments, so that what they just released moves in this pass.
-	return errors.Join(catchUpErr, trackErr, l.finishDeleted(ctx))
+	errs := []error{catchUpErr, trackErr, l.finishDeleted(ctx), l.readSynced(ctx)}
+	if l.due(&l.nextShortfall, shortfallCheckEvery) {
+		errs = append(errs, l.watchShortfall(ctx))
+	}
+	if l.due(&l.nextCheck, regularCheckEvery) {
+		errs = append(errs, l.regularCheck(ctx))
+	}
+	return errors.Join(errs...)
 }
 
 func (l *Ledger) passDue() bool {

@@ -36,6 +36,11 @@ type Ledger interface {
 	// Fund and Withdraw are the only way the UI moves money (R15).
 	Fund(ctx context.Context, accountID, amountMsat int64) (ledger.Transaction, error)
 	Withdraw(ctx context.Context, accountID, amountMsat int64) (ledger.Transaction, error)
+	// Alerts and CloseAlert show and clear what the ledger found wrong.
+	Alerts(ctx context.Context) ([]ledger.Alert, error)
+	CloseAlert(ctx context.Context, id int64) error
+	// NodeSynced is the node's last answer about the chain. It reads no node.
+	NodeSynced() bool
 }
 
 // Config sets up the server.
@@ -121,6 +126,7 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("GET /subwallets/{id}/delete", s.deleteSubWalletPage)
 	mux.HandleFunc("POST /subwallets/{id}/delete", s.deleteSubWallet)
 	mux.HandleFunc("GET /transactions", s.transactionsPage)
+	mux.HandleFunc("POST /alerts/{id}/close", s.closeAlert)
 	s.handler = s.guard(mux)
 	return s, nil
 }

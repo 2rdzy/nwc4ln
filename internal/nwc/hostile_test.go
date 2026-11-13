@@ -167,3 +167,16 @@ func TestPruneRequests(t *testing.T) {
 		}
 	}
 }
+
+// Catches: a client told a payment failed, or nothing clear, while the node is behind
+// the chain and payments out are paused.
+func TestPayWhileNodeNotSynced(t *testing.T) {
+	e := newEnv(t)
+	e.node.SetSynced(false)
+	e.restart() // The ledger reads the node's state when it starts.
+	response := e.call(e.client, "pay_invoice", map[string]any{"invoice": e.node.OutsideInvoice(sat)})
+	wantCode(t, response, codeOther)
+	if response.Error.Message != "the node is catching up with the chain, try again later" {
+		t.Fatalf("message %q", response.Error.Message)
+	}
+}
