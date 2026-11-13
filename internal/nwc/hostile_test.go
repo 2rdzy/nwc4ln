@@ -7,6 +7,7 @@ import (
 
 	"github.com/getAlby/go-nostr"
 
+	"github.com/2rdzy/nwc4ln/internal/ledger"
 	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
 )
 
@@ -148,8 +149,10 @@ func TestPruneRequests(t *testing.T) {
 	insert("old", old)
 	insert("recent", recent)
 	paid := insert("old-paid", old)
-	_, err := e.store.DB.Exec(`INSERT INTO transactions (request_id, type, state, amount_msat, payment_hash, created_at)
-		VALUES (?, 'outgoing', 'settled', 1000, 'hash', ?)`, paid, old)
+	// Only the ledger writes transactions, so the row comes from it.
+	_, err := e.ledger.MakeInvoice(t.Context(), ledger.InvoiceRequest{
+		AccountID: e.accountOf(e.client), AmountMsat: sat, RequestID: paid,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
