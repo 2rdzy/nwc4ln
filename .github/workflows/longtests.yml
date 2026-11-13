@@ -1,0 +1,73 @@
+# Weekly long tests: the soak, crash loop and outage tests for an hour on each node,
+# and a few minutes of fuzzing. They never run on a pull request; PR CI runs short
+# versions. Started by hand, the soak length can be chosen. Actions are pinned by
+# commit, and the token is read-only.
+name: longtests
+
+on:
+  schedule:
+    - cron: "41 2 * * 6"
+  workflow_dispatch:
+    inputs:
+      soak:
+        description: "Soak length on each node, such as 1h (GitHub stops a job at 6h)"
+        default: "1h"
+
+permissions:
+  contents: read
+
+jobs:
+  long:
+    name: long (${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [lnd, cln]
+    env:
+      NWC4LN_IT_NODE: ${{ matrix.node }}
+      NWC4LN_SOAK_FOR: ${{ inputs.soak || '1h' }}
+      NWC4LN_CRASH_FOR: 15m
+      NWC4LN_OUTAGE_ROUNDS: "3"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/nwc4ln-it
+          key: nwc4ln-it-${{ runner.os }}-${{ hashFiles('test/integration/versions.env') }}
+      - name: Set the folders
+        run: |
+          echo "NWC4LN_IT_DIR=$RUNNER_TEMP/nwc4ln-it" >> "$GITHUB_ENV"
+          echo "NWC4LN_LONG_LOGS=$RUNNER_TEMP/long" >> "$GITHUB_ENV"
+      - name: Install Core Lightning libraries
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libsodium23 libpq5 libsqlite3-0
+      - name: Long tests
+        run: scripts/longtests.sh
+      - name: Show logs
+        if: failure()
+        run: tail -n 80 "$NWC4LN_LONG_LOGS"/long.log "$NWC4LN_IT_DIR"/*.log
+
+  fuzz:
+    name: fuzz
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Fuzz each target for a minute
+        run: |
+          go test -run '^$' -fuzz '^FuzzRequest$' -fuzztime 1m ./internal/nwc
+          go test -run '^$' -fuzz '^FuzzPayAmount$' -fuzztime 1m ./internal/ledger
+          go test -run '^$' -fuzz '^FuzzAmountFromForm$' -fuzztime 1m ./internal/web
+          go test -run '^$' -fuzz '^FuzzSettingsFromForm$' -fuzztime 1m ./internal/web
