@@ -27,3 +27,17 @@ Needs Linux `amd64`, `git` and Go. Versions are pinned in [versions.env](version
   build is pinned per Ubuntu release (24.04 for CI, 26.04 locally), and it reads clnrest over HTTPS with a rune limited
   to the client's methods. It polls Knots every second and has fixed fee rates, so figures do not move during a test.
 - **Ports** start at 19500. `up` refuses to start if one is taken.
+
+## Long tests
+
+`nwc/long_test.go` has a random soak (`TestSoak`), a crash loop on the real binary (`TestCrashLoop`) and node and
+relay outages (`TestOutages`). By default they run a short version, as PR CI does. The environment sets their length,
+listed at the top of that file. `scripts/longtests.sh` starts a network, runs the three, and stops it:
+
+```sh
+NWC4LN_SOAK_FOR=6h scripts/longtests.sh
+NWC4LN_IT_NODE=cln NWC4LN_SOAK_FOR=24h NWC4LN_CRASH_FOR=1h scripts/longtests.sh
+```
+
+For runs of hours, set `NWC4LN_IT_DIR` to a folder on disk. A failed soak prints its seed: `NWC4LN_LONG_SEED` replays
+it. The weekly `longtests` workflow runs an hour on each node, and can be started by hand with another length.

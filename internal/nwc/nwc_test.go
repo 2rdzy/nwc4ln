@@ -37,7 +37,7 @@ var allMethods = []string{
 }
 
 type env struct {
-	t       *testing.T
+	t       testing.TB
 	store   *store.Store
 	path    string
 	node    *fake.Node
@@ -47,7 +47,7 @@ type env struct {
 	now     *atomic.Int64
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t testing.TB) *env {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.db")
 	db, err := store.Create(t.Context(), path)
