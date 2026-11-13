@@ -8,6 +8,14 @@
 </div>
 <a class="btn ghost" href="/">Read again</a>
 </div>
+{{if not .PausedKnown}}
+<p class="warn" id="paused-unknown">The freeze switch could not be read. The log has the details.</p>
+{{else if .Paused}}
+<section class="card" id="paused" aria-label="Sub-wallet spending paused">
+<p class="warn"><b>Sub-wallet spending is paused.</b> No sub-wallet can pay, not even another account on this node. They still receive, pending payments finish, apps are not affected, and withdraw still works.</p>
+<form method="post" action="/subwallets/resume"><button type="submit">Resume sub-wallet spending</button></form>
+</section>
+{{end}}
 {{if not .Synced}}
 <p class="warn" id="not-synced"><b>The node is catching up with the chain.</b> Payments that leave the node are paused until it is synced. Receiving, and payments between accounts, go on.</p>
 {{end}}
@@ -45,6 +53,7 @@
 <div class="actions">
 <a class="btn" href="/apps/new">Add an app</a>
 <a class="btn secondary" href="/subwallets/new">Add a sub-wallet</a>
+{{if and .PausedKnown (not .Paused)}}<form method="post" action="/subwallets/pause" id="pause"><button type="submit" class="danger">Pause sub-wallet spending</button></form>{{end}}
 </div>
 </section>
 

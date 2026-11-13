@@ -17,9 +17,11 @@ type dashboardData struct {
 	Alerts      []ledger.Alert
 	AlertsKnown bool
 	// Synced is the node's last answer about the chain.
-	Synced   bool
-	Overview ledger.Overview
-	ReadAt   string
+	Synced bool
+	// Paused is the freeze switch. PausedKnown is false if it could not be read.
+	Paused, PausedKnown bool
+	Overview            ledger.Overview
+	ReadAt              string
 	// Counted is false if the database could not list apps and sub-wallets.
 	Counted     bool
 	AppCount    int
@@ -45,6 +47,11 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	s.noteRead(now, err == nil)
 	data.Synced = s.ledger.NodeSynced()
+	if paused, err := s.ledger.SpendingPaused(r.Context()); err != nil {
+		s.log.Warn("dashboard: freeze switch unknown", "error", err)
+	} else {
+		data.Paused, data.PausedKnown = paused, true
+	}
 	if alerts, err := s.ledger.Alerts(r.Context()); err != nil {
 		s.log.Warn("dashboard: alerts unknown", "error", err)
 	} else {
@@ -108,6 +115,18 @@ func (s *Server) closeAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) pauseSpending(w http.ResponseWriter, r *http.Request)  { s.setPaused(w, r, true) }
+func (s *Server) resumeSpending(w http.ResponseWriter, r *http.Request) { s.setPaused(w, r, false) }
+
+// setPaused turns the freeze switch, then goes back to the dashboard.
+func (s *Server) setPaused(w http.ResponseWriter, r *http.Request, paused bool) {
+	if err := s.ledger.SetSpendingPaused(r.Context(), paused); err != nil {
 		s.fail(w, err)
 		return
 	}

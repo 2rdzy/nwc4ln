@@ -180,3 +180,17 @@ func TestPayWhileNodeNotSynced(t *testing.T) {
 		t.Fatalf("message %q", response.Error.Message)
 	}
 }
+
+// Catches: a paused sub-wallet told it lacks funds, or nothing clear.
+func TestPayWhileSpendingPaused(t *testing.T) {
+	e := newEnv(t)
+	wallet := e.addSubWallet("holder")
+	if err := e.ledger.SetSpendingPaused(t.Context(), true); err != nil {
+		t.Fatal(err)
+	}
+	response := e.call(wallet, "pay_invoice", map[string]any{"invoice": e.node.OutsideInvoice(sat)})
+	wantCode(t, response, codeOther)
+	if response.Error.Message != "sub-wallet spending is paused by the operator" {
+		t.Fatalf("message %q", response.Error.Message)
+	}
+}

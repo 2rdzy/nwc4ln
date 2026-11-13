@@ -33,13 +33,15 @@ type Alert struct {
 // raise stores an alert once per kind and key, and logs it. A repeat, even of one
 // the admin closed, adds nothing. It reports a failure to store only in the log, so
 // that an alert never stops the money path.
-func (l *Ledger) raise(ctx context.Context, db executor, kind, key, message string) {
+// It reports whether the alert is new.
+func (l *Ledger) raise(ctx context.Context, db executor, kind, key, message string) bool {
 	l.log.Error("alert: "+message, "kind", kind, "key", key)
-	_, err := db.ExecContext(context.WithoutCancel(ctx), `INSERT INTO alerts (kind, key, message, created_at)
-		VALUES (?, ?, ?, ?) ON CONFLICT (kind, key) DO NOTHING`, kind, key, message, l.now().Unix())
+	added, err := changedOne(db.ExecContext(context.WithoutCancel(ctx), `INSERT INTO alerts (kind, key, message, created_at)
+		VALUES (?, ?, ?, ?) ON CONFLICT (kind, key) DO NOTHING`, kind, key, message, l.now().Unix()))
 	if err != nil {
 		l.log.Error("store alert", "kind", kind, "error", err)
 	}
+	return added
 }
 
 // Alerts lists the open alerts, newest first.
@@ -100,11 +102,18 @@ func (l *Ledger) watchShortfall(ctx context.Context) error {
 			now.Unix(), AlertShortfall)
 		return err
 	}
-	if now.Sub(since) >= shortfallAlertAfter {
-		l.raise(ctx, l.db, AlertShortfall, fmt.Sprint(since.Unix()), fmt.Sprintf(
-			"Shortfall of %d msat since %s: sub-wallets and pending payments are owed more than the node can send. "+
-				"An offline peer does not cause this. A closing channel, or a new channel below its reserve, can.",
-			overview.ShortfallMsat, since.UTC().Format(time.DateTime+" UTC")))
+	if now.Sub(since) < shortfallAlertAfter {
+		return nil
+	}
+	added := l.raise(ctx, l.db, AlertShortfall, fmt.Sprint(since.Unix()), fmt.Sprintf(
+		"Shortfall of %d msat since %s: sub-wallets and pending payments are owed more than the node can send. "+
+			"An offline peer does not cause this. A closing channel, or a new channel below its reserve, can. "+
+			"Sub-wallet spending is paused, so that no holder pays out ahead of the others: resume it on the dashboard.",
+		overview.ShortfallMsat, since.UTC().Format(time.DateTime+" UTC")))
+	// Once per shortfall, when its alert is new: a resume by the admin during the same
+	// shortfall stands (owner, SR5).
+	if added {
+		return l.SetSpendingPaused(ctx, true)
 	}
 	return nil
 }

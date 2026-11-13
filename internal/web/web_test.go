@@ -28,6 +28,7 @@ type stubLedger struct {
 	alerts    []ledger.Alert
 	notSynced bool
 	closed    int64
+	paused    bool
 }
 
 func (s *stubLedger) Overview(context.Context) (ledger.Overview, error) {
@@ -38,6 +39,11 @@ func (s *stubLedger) Apps(context.Context) ([]ledger.App, error)     { return ni
 func (s *stubLedger) Alerts(context.Context) ([]ledger.Alert, error) { return s.alerts, nil }
 func (s *stubLedger) CloseAlert(_ context.Context, id int64) error {
 	s.closed = id
+	return nil
+}
+func (s *stubLedger) SpendingPaused(context.Context) (bool, error) { return s.paused, nil }
+func (s *stubLedger) SetSpendingPaused(_ context.Context, paused bool) error {
+	s.paused = paused
 	return nil
 }
 func (s *stubLedger) NodeSynced() bool { return !s.notSynced }
