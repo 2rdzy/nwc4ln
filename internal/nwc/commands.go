@@ -197,6 +197,8 @@ func (s *Service) refused(command string, err error) *Error {
 		return &Error{Code: codeInsufficientBalance, Message: "not enough funds, including the fee reserve"}
 	case errors.Is(err, ledger.ErrTooManyInvoices):
 		return &Error{Code: codeRateLimited, Message: "too many invoices, wait for some to expire or be paid"}
+	case errors.Is(err, ledger.ErrSpendingPaused):
+		message = "sub-wallet spending is paused by the operator"
 	case errors.Is(err, ledger.ErrNodeNotSynced):
 		message = "the node is catching up with the chain, try again later"
 	case errors.Is(err, ledger.ErrBadExpiry):

@@ -112,3 +112,24 @@ func TestDashboardAlertsAndSync(t *testing.T) {
 		t.Fatalf("bad id: %d", response.StatusCode)
 	}
 }
+
+// Catches: a freeze switch the admin cannot see or turn, from the dashboard.
+func TestDashboardFreezeSwitch(t *testing.T) {
+	stub := &stubLedger{}
+	e := newEnv(t, stub)
+	cookie := e.login()
+	if page := body(t, e.do(http.MethodGet, "/", withCookie(cookie))); !strings.Contains(page, `action="/subwallets/pause"`) {
+		t.Fatal("no pause button")
+	}
+	if response := e.do(http.MethodPost, "/subwallets/pause", withCookie(cookie)); response.StatusCode != http.StatusSeeOther || !stub.paused {
+		t.Fatalf("pause: %d, paused %v", response.StatusCode, stub.paused)
+	}
+	page := body(t, e.do(http.MethodGet, "/", withCookie(cookie)))
+	if !strings.Contains(page, `id="paused"`) || !strings.Contains(page, `action="/subwallets/resume"`) ||
+		strings.Contains(page, `action="/subwallets/pause"`) {
+		t.Fatalf("paused dashboard:\n%s", page)
+	}
+	if response := e.do(http.MethodPost, "/subwallets/resume", withCookie(cookie)); response.StatusCode != http.StatusSeeOther || stub.paused {
+		t.Fatalf("resume: %d, paused %v", response.StatusCode, stub.paused)
+	}
+}

@@ -41,6 +41,9 @@ type Ledger interface {
 	CloseAlert(ctx context.Context, id int64) error
 	// NodeSynced is the node's last answer about the chain. It reads no node.
 	NodeSynced() bool
+	// SpendingPaused and SetSpendingPaused read and turn the freeze switch (R14).
+	SpendingPaused(ctx context.Context) (bool, error)
+	SetSpendingPaused(ctx context.Context, paused bool) error
 }
 
 // Config sets up the server.
@@ -127,6 +130,8 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("POST /subwallets/{id}/delete", s.deleteSubWallet)
 	mux.HandleFunc("GET /transactions", s.transactionsPage)
 	mux.HandleFunc("POST /alerts/{id}/close", s.closeAlert)
+	mux.HandleFunc("POST /subwallets/pause", s.pauseSpending)
+	mux.HandleFunc("POST /subwallets/resume", s.resumeSpending)
 	s.handler = s.guard(mux)
 	return s, nil
 }

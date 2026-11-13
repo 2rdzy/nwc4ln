@@ -172,6 +172,18 @@ func (l *Ledger) hold(
 	if !settings.CanPay {
 		return Transaction{}, ErrRestricted
 	}
+	// Read under holdLock, in the transaction that stores the hold, so a payment cannot
+	// pass while the switch turns. It covers payments to other accounts too: they move
+	// value between holders (owner, SR5).
+	if subWallet {
+		paused, err := spendingPaused(ctx, tx)
+		if err != nil {
+			return Transaction{}, err
+		}
+		if paused {
+			return Transaction{}, ErrSpendingPaused
+		}
+	}
 	var taken int
 	err = tx.QueryRowContext(ctx, `SELECT count(*) FROM transactions
 		WHERE payment_hash = ? AND type = 'outgoing' AND state IN ('pending', 'settled')`, decoded.Hash).Scan(&taken)
