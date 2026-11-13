@@ -222,10 +222,20 @@ func TestSettleCallbackRunsOutsideLock(t *testing.T) {
 	e := newEnv(t)
 	seen := make(chan struct{}, 2)
 	e.ledger.OnSettled(func(Transaction) {
-		if !e.ledger.holdLock.TryLock() {
-			t.Error("holdLock is held during the callback")
-		} else {
+		// Another part of the ledger may hold the lock for a moment, which is normal, so
+		// TryLock alone gives false alarms. Instead, wait for the lock from another
+		// goroutine: if the callback runs under it, the lock cannot come free while the
+		// callback waits, and the wait times out.
+		free := make(chan struct{})
+		go func() {
+			e.ledger.holdLock.Lock()
 			e.ledger.holdLock.Unlock()
+			close(free)
+		}()
+		select {
+		case <-free:
+		case <-time.After(2 * time.Second):
+			t.Error("holdLock is held during the callback")
 		}
 		seen <- struct{}{}
 	})

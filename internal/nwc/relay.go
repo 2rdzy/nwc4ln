@@ -64,7 +64,22 @@ func (s *Service) serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer func() { subscription.Unsub() }() // The one in use at the end.
+	// While connections change, the old subscription is still read until the relay
+	// confirms the new one, so that no request falls between them. Closing a
+	// subscription drops what it received and nobody read yet, so it is closed only
+	// once the new one has had time to take over.
+	var (
+		old       *nostr.Subscription
+		oldEvents chan *nostr.Event
+		ready     chan struct{} // The new subscription's end of stored events.
+		retire    <-chan time.Time
+	)
+	defer func() {
+		subscription.Unsub() // The one in use at the end.
+		if old != nil {
+			old.Unsub()
+		}
+	}()
 	s.setRelay(relay)
 	s.publishInfo(ctx)
 	s.log.Info("listening on relay", "relay", s.relay, "connections", len(s.connectionList()))
@@ -77,15 +92,33 @@ func (s *Service) serve(ctx context.Context) error {
 		case reason := <-subscription.ClosedReason:
 			return fmt.Errorf("relay closed the subscription: %s", reason)
 		case <-s.changed:
-			// The new one opens first, so that no request falls between the two. A
-			// request that reaches both is dropped as a repeat.
+			// A request that reaches both subscriptions is dropped as a repeat.
 			next, err := relay.Subscribe(ctx, nostr.Filters{s.filter(since)})
 			if err != nil {
 				return err
 			}
-			subscription.Unsub()
-			subscription = next
+			if old != nil { // A change during a change: the oldest has overlapped long enough.
+				old.Unsub()
+			}
+			old, oldEvents = subscription, subscription.Events
+			subscription, ready = next, next.EndOfStoredEvents
+			retire = time.After(overlapLimit) // In case the relay never confirms it.
 			s.publishInfo(ctx)
+		case <-ready:
+			ready = nil
+			retire = time.After(overlapAfterReady)
+		case <-retire:
+			retire = nil
+			if old != nil {
+				old.Unsub()
+				old, oldEvents = nil, nil
+			}
+		case event, open := <-oldEvents:
+			if !open {
+				oldEvents = nil
+				continue
+			}
+			s.receive(ctx, event)
 		case event, open := <-subscription.Events:
 			if !open {
 				return errors.New("subscription ended")
