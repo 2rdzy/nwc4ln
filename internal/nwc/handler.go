@@ -68,6 +68,9 @@ type accepted struct {
 	// limited means the connection is over its rate. The request has no row, does no
 	// work, and only gets RATE_LIMITED.
 	limited bool
+	// refused is the reply for a connection that may no longer be used: revoked,
+	// deleted or expired. Like a limited request, it has no row and does no work.
+	refused *Error
 }
 
 // accept decides whether an event is a new request for one of our connections,
@@ -79,21 +82,23 @@ func (s *Service) accept(ctx context.Context, event *nostr.Event) *accepted {
 	}
 	// The signature covers the event's content, not its id field. Without the ID
 	// check, a repeat under a new id would pass the unique index below.
+	// Anyone can send these, because service keys are public, so they are logged at
+	// debug level only: a stranger must not be able to fill the log.
 	if !event.CheckID() {
-		s.log.Warn("request dropped: id does not match the event")
+		s.log.Debug("request dropped: id does not match the event")
 		return nil
 	}
 	if valid, err := event.CheckSignature(); err != nil || !valid {
-		s.log.Warn("request dropped: bad signature", "event", event.ID)
+		s.log.Debug("request dropped: bad signature", "event", event.ID)
 		return nil
 	}
 	c, found := s.findConnection(event)
 	if !found {
-		s.log.Warn("request dropped: no connection for this key", "event", event.ID)
+		s.log.Debug("request dropped: no connection for this key", "event", event.ID)
 		return nil
 	}
 	if expired(event, s.now()) {
-		s.log.Info("request dropped: expired", "event", event.ID)
+		s.log.Debug("request dropped: expired", "event", event.ID)
 		return nil
 	}
 	// A repeat spends no rate: anyone who reads the relay can copy a signed request
@@ -103,6 +108,17 @@ func (s *Service) accept(ctx context.Context, event *nostr.Event) *accepted {
 	if err != nil || repeat {
 		s.log.Info("request dropped: seen before", "event", event.ID, "error", err)
 		return nil
+	}
+	// A connection that may no longer be used is often held by someone no longer
+	// trusted. Its requests are not stored, and it hears UNAUTHORIZED at most once a
+	// minute, so that it can neither grow the database nor make work. Any other
+	// problem goes the usual way, and answer reports it.
+	if failed := s.checkAccess(ctx, &accepted{event: event, connection: c}); failed != nil &&
+		failed.Code == codeUnauthorized {
+		if !s.take(s.refusals, c.id, refusalEvery, 1) {
+			return nil
+		}
+		return &accepted{event: event, connection: c, refused: failed}
 	}
 	// Before the store, because that is a synced write on the one relay goroutine. A
 	// refused request has no row, so a later repeat could run. R9 stops a second
@@ -208,7 +224,7 @@ func (s *Service) store(ctx context.Context, event *nostr.Event, c connection) (
 // payment, not the payment, so the state is stored even then.
 func (s *Service) run(ctx context.Context, a *accepted) *nostr.Event {
 	reply, scheme, methodName, state := s.answer(ctx, a)
-	if !a.limited {
+	if a.rowID != 0 {
 		if _, err := s.db.ExecContext(context.WithoutCancel(ctx), `UPDATE requests SET method = ?, state = ? WHERE id = ?`,
 			methodName, state, a.rowID); err != nil {
 			s.log.Error("cannot record request state", "event", a.event.ID, "error", err)
@@ -253,6 +269,13 @@ func (s *Service) answer(ctx context.Context, a *accepted) (*response, string, s
 		s.log.Info("request dropped: outside the time limits", "event", a.event.ID, "method", req.Method)
 		return nil, "", req.Method, stateIgnored
 	}
+	if a.refused != nil {
+		return &response{ResultType: req.Method, Error: a.refused}, scheme, req.Method, stateFailed
+	}
+	if payTooOld(req.Method, a.event, s.now()) {
+		s.log.Info("payment refused: request too old", "event", a.event.ID)
+		return failure(req.Method, codeOther, "request too old: check your device clock"), scheme, req.Method, stateIgnored
+	}
 	if a.limited {
 		return failure(req.Method, codeRateLimited, "too many requests, try again in a moment"), scheme, req.Method, stateFailed
 	}
@@ -266,6 +289,9 @@ func (s *Service) answer(ctx context.Context, a *accepted) (*response, string, s
 	if !permitted(req.Method, a.settings.CanPay, a.settings.CanInvoice) {
 		return failure(req.Method, codeRestricted, "this app may not do that"), scheme, req.Method, stateFailed
 	}
+	if req.Method == "make_invoice" && !s.take(s.invoiceLimiters, a.connection.id, invoiceEvery, s.invoiceBurst) {
+		return failure(req.Method, codeRateLimited, "too many invoices, try again in a moment"), scheme, req.Method, stateFailed
+	}
 	result, failed := handle(ctx, a, req.Params)
 	if failed == errPaymentPending {
 		return &response{ResultType: req.Method, Error: failed}, scheme, req.Method, statePending
@@ -274,6 +300,19 @@ func (s *Service) answer(ctx context.Context, a *accepted) (*response, string, s
 		return &response{ResultType: req.Method, Error: failed}, scheme, req.Method, stateFailed
 	}
 	return &response{ResultType: req.Method, Result: result}, scheme, req.Method, stateDone
+}
+
+// payTooOld is the short age limit for a payment with no expiration tag. A client
+// gives up after about a minute and may pay another way, so a request a relay held
+// back must not pay later (owner, SR3). With the tag, the client decides.
+func payTooOld(method string, event *nostr.Event, now time.Time) bool {
+	if method != "pay_invoice" {
+		return false
+	}
+	if _, tagged := tagValue(event, "expiration"); tagged {
+		return false
+	}
+	return now.Unix()-int64(event.CreatedAt) > int64(maxPayAge/time.Second)
 }
 
 func failure(method, code, message string) *response {

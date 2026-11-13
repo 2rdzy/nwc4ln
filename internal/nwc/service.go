@@ -45,6 +45,9 @@ const (
 const (
 	maxAge    = 6 * time.Hour
 	maxFuture = 10 * time.Minute
+	// maxPayAge is the limit for a pay_invoice with no expiration tag: about how long a
+	// client waits for the answer.
+	maxPayAge = time.Minute
 )
 
 // How the service catches up, and how long an answer waits for the relay.
@@ -67,6 +70,23 @@ const (
 	// after that. A person's wallet stays far below this.
 	rateBurst  = 50
 	rateRefill = 5
+
+	// make_invoice has its own, lower rate: invoiceBurst at once, then one every
+	// invoiceEvery. A person makes a few a day.
+	invoiceBurst = 10
+	invoiceEvery = 6 * time.Second
+
+	// refusalEvery is how often a revoked, deleted or expired connection hears
+	// UNAUTHORIZED. revokedKeep is how long after a revoke the service still listens
+	// for the key at all.
+	refusalEvery = time.Minute
+	revokedKeep  = 30 * 24 * time.Hour
+
+	// Requests rows are kept pruneAfter, then removed by a pass every pruneEvery. Only
+	// the unique event ID matters, and pay_invoice and make_invoice are refused after
+	// maxAge anyway. A row a transaction refers to is kept.
+	pruneAfter = 48 * time.Hour
+	pruneEvery = 24 * time.Hour
 
 	lastSeenKey = "nwc_last_seen"
 )
@@ -99,12 +119,13 @@ type Service struct {
 	log    *slog.Logger
 
 	// Changed only by tests.
-	now       func() time.Time
-	publish   func(ctx context.Context, event nostr.Event) error
-	sendFor   time.Duration
-	sendRetry time.Duration
-	payWait   time.Duration
-	burst     int
+	now          func() time.Time
+	publish      func(ctx context.Context, event nostr.Event) error
+	sendFor      time.Duration
+	sendRetry    time.Duration
+	payWait      time.Duration
+	burst        int
+	invoiceBurst int
 
 	methods map[string]method
 
@@ -119,8 +140,10 @@ type Service struct {
 
 	notifications chan ledger.Transaction
 
-	limitersMu sync.Mutex
-	limiters   map[int64]*rate.Limiter // By connection ID. Lost at a restart, which is fine.
+	limitersMu      sync.Mutex
+	limiters        map[int64]*rate.Limiter // By connection ID. Lost at a restart, which is fine.
+	invoiceLimiters map[int64]*rate.Limiter // make_invoice, by connection ID.
+	refusals        map[int64]*rate.Limiter // UNAUTHORIZED replies, by connection ID.
 
 	mu   sync.Mutex
 	conn *nostr.Relay // The current relay connection, or nil while there is none.
@@ -138,11 +161,14 @@ func New(
 	s := &Service{
 		db: db.DB, node: n, ledger: l, relay: relay, log: log,
 		now: time.Now, sendFor: sendFor, sendRetry: sendRetry, payWait: payWait, burst: rateBurst,
-		connections:   map[string]connection{},
-		limiters:      map[int64]*rate.Limiter{},
-		changed:       make(chan struct{}, 1),
-		lastInfo:      map[int64]int64{},
-		notifications: make(chan ledger.Transaction, notifyQueue),
+		invoiceBurst:    invoiceBurst,
+		connections:     map[string]connection{},
+		limiters:        map[int64]*rate.Limiter{},
+		invoiceLimiters: map[int64]*rate.Limiter{},
+		refusals:        map[int64]*rate.Limiter{},
+		changed:         make(chan struct{}, 1),
+		lastInfo:        map[int64]int64{},
+		notifications:   make(chan ledger.Transaction, notifyQueue),
 	}
 	s.publish = s.publishToRelay
 	s.methods = map[string]method{
@@ -161,9 +187,11 @@ func New(
 }
 
 func (s *Service) load(ctx context.Context) error {
+	// A key revoked longer than revokedKeep ago is left out, so its client hears nothing.
 	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.account_id, c.client_pubkey, c.service_key,
 		c.revoked_at IS NOT NULL, a.can_pay, a.can_invoice
-		FROM connections c JOIN accounts a ON a.id = c.account_id`)
+		FROM connections c JOIN accounts a ON a.id = c.account_id
+		WHERE c.revoked_at IS NULL OR c.revoked_at >= ?`, s.now().Add(-revokedKeep).Unix())
 	if err != nil {
 		return fmt.Errorf("load connections: %w", err)
 	}
@@ -274,6 +302,54 @@ func (s *Service) allowed(connectionID int64) bool {
 	}
 	s.limitersMu.Unlock()
 	return limiter.AllowN(s.now(), 1)
+}
+
+// take spends one event from a connection's limiter in limiters, made on first use
+// with one event every interval and the burst.
+func (s *Service) take(limiters map[int64]*rate.Limiter, connectionID int64, every time.Duration, burst int) bool {
+	s.limitersMu.Lock()
+	limiter, found := limiters[connectionID]
+	if !found {
+		limiter = rate.NewLimiter(rate.Every(every), burst)
+		limiters[connectionID] = limiter
+	}
+	s.limitersMu.Unlock()
+	return limiter.AllowN(s.now(), 1)
+}
+
+// prune removes requests rows older than pruneAfter that no transaction refers to.
+// Payments and invoices live in transactions, which this never touches.
+func (s *Service) prune(ctx context.Context) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM requests WHERE created_at < ? AND id NOT IN
+		(SELECT request_id FROM transactions WHERE request_id IS NOT NULL)`, s.now().Add(-pruneAfter).Unix())
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// maintain prunes at start and then every pruneEvery. Each later pass also reloads
+// the connections, so that a key revoked longer than revokedKeep ago is dropped.
+func (s *Service) maintain(ctx context.Context) {
+	ticker := time.NewTicker(pruneEvery)
+	defer ticker.Stop()
+	for first := true; ; first = false {
+		if removed, err := s.prune(ctx); err != nil {
+			s.log.Warn("prune requests", "error", err)
+		} else if removed > 0 {
+			s.log.Info("pruned old requests", "rows", removed)
+		}
+		if !first {
+			if err := s.reload(ctx); err != nil {
+				s.log.Warn("reload connections", "error", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // permitted decides whether settings allow a method. A connection with pay off may

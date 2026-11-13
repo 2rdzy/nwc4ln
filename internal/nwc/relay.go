@@ -15,6 +15,7 @@ import (
 func (s *Service) Run(ctx context.Context) {
 	defer s.work.Wait()
 	s.work.Go(func() { s.notifyLoop(ctx) })
+	s.work.Go(func() { s.maintain(ctx) })
 	if len(s.connectionList()) == 0 {
 		s.log.Warn("no connections to serve yet")
 		select {
