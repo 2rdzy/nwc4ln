@@ -255,7 +255,7 @@ func TestReplaceConnection(t *testing.T) {
 }
 
 // Catches: a replace on an account it must leave alone, which would hand out a working
-// key for a deleted account or change how an app connects.
+// key for a deleted or unknown account.
 func TestReplaceRefused(t *testing.T) {
 	e := newEnv(t)
 	e.addSubWallet("holder")
@@ -263,11 +263,7 @@ func TestReplaceRefused(t *testing.T) {
 	if err := e.service.DeleteSubWallet(t.Context(), wallet); err != nil {
 		t.Fatal(err)
 	}
-	var app int64
-	if err := e.store.DB.QueryRow(`SELECT id FROM accounts WHERE type = 'app'`).Scan(&app); err != nil {
-		t.Fatal(err)
-	}
-	for name, id := range map[string]int64{"deleted": wallet, "app": app, "unknown": 9_999} {
+	for name, id := range map[string]int64{"deleted": wallet, "unknown": 9_999} {
 		if _, err := e.service.ReplaceConnection(t.Context(), id); !errors.Is(err, ledger.ErrUnknownAccount) {
 			t.Errorf("%s: %v", name, err)
 		}

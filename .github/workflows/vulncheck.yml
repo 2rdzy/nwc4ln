@@ -1,0 +1,27 @@
+# A weekly check of the dependencies against Go's vulnerability database. It never
+# runs on a pull request, so it cannot hold back a fix. A failed run emails the
+# owner. Actions are pinned by commit, and the token is read-only.
+name: vulncheck
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: govulncheck
+        run: scripts/vulncheck.sh

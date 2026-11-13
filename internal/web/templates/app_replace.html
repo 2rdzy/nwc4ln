@@ -1,0 +1,12 @@
+{{template "head" "nwc4ln: replace a connection string"}}
+{{template "nav" "apps"}}
+<main>
+<h1>Replace the connection string of {{.Name}}?</h1>
+<section class="card">
+<p>The current string stops working at once. The next page shows a new one, once. The settings, usage and history stay.</p>
+<form method="post" action="/apps/{{.ID}}/replace">
+<p class="actions"><button type="submit">Replace it</button> <a class="btn ghost" href="/apps/{{.ID}}">Cancel</a></p>
+</form>
+</section>
+</main>
+{{template "foot"}}

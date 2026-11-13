@@ -1,12 +1,13 @@
-{{template "head" "nwc4ln: app added"}}
+{{template "head" "nwc4ln: connection string"}}
 {{template "nav" "apps"}}
 <main>
-<h1>{{.Name}} added</h1>
-<p class="warn"><b>This is the only time the connection string is shown.</b> nwc4ln keeps no copy of its secret. Copy it into the app now, or scan the code. Anyone with it can use the app's permissions. Reloading this page adds another app.</p>
+<h1>{{if .Replaced}}New connection string for {{.Name}}{{else}}{{.Name}} added{{end}}</h1>
+{{if .Replaced}}<p class="note" id="replaced">The old connection string has stopped working. The settings, usage and history are unchanged.</p>{{end}}
+<p class="warn"><b>This is the only time the connection string is shown.</b> nwc4ln keeps no copy of its secret. Copy it into the app now, or scan the code. Anyone with it can use the app's permissions. Reloading this page {{if .Replaced}}replaces the string again, and this one stops working{{else}}adds another app{{end}}.</p>
 <section class="card">
 {{if .QR}}<div id="qr">{{.QR}}</div>{{end}}
 <p><textarea id="connection" readonly rows="5" cols="70">{{.ConnectionString}}</textarea></p>
-<p><a class="btn ghost" href="/apps">Back to apps</a></p>
+<p>{{if .Replaced}}<a class="btn ghost" href="/apps/{{.ID}}">Back to {{.Name}}</a>{{else}}<a class="btn ghost" href="/apps">Back to apps</a>{{end}}</p>
 </section>
 </main>
 {{template "foot"}}

@@ -253,8 +253,8 @@ func (s *Service) DeleteSubWallet(ctx context.Context, accountID int64) error {
 	return s.reload(ctx)
 }
 
-// ReplaceConnection gives a sub-wallet a new connection string and kills the old one.
-// The balance and history stay. The string is the only copy of the client secret, as
+// ReplaceConnection gives an app or a sub-wallet a new connection string and kills the
+// old one, as after a leak. Settings, usage, balance and history stay. The string is the only copy of the client secret, as
 // with AddApp.
 func (s *Service) ReplaceConnection(ctx context.Context, accountID int64) (string, error) {
 	connectionString, err := replaceConnection(ctx, s.db, accountID, s.relay)

@@ -1,0 +1,11 @@
+# Vulnerabilities govulncheck reports that do not affect nwc4ln. Each line is an ID,
+# then why. scripts/vulncheck.sh fails on any other. Remove a line once a fixed
+# version is in go.mod: the script says when one is no longer found.
+#
+# The four below are in Docker and runc, which lnd's RPC packages pull in. nwc4ln
+# reaches them only through package start-up code (init), never by a call, and runs
+# no container.
+GO-2026-5761 runc: reached only from lnd's routerrpc init
+GO-2025-4098 runc: reached only from lnd's routerrpc init
+GO-2026-4887 docker: reached only from lnd's routerrpc init; no fixed version
+GO-2026-4883 docker: reached only from lnd's routerrpc init; no fixed version

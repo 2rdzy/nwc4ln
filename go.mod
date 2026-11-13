@@ -1,6 +1,6 @@
 module github.com/2rdzy/nwc4ln
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -92,7 +92,7 @@ require (
 	github.com/juju/testing v1.0.2 // indirect
 	github.com/juju/utils/v3 v3.2.3 // indirect
 	github.com/kkdai/bstream v1.0.0 // indirect
-	github.com/klauspost/compress v1.18.0 // indirect
+	github.com/klauspost/compress v1.20.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/lightninglabs/gozmq v0.0.0-20191113021534-d20a764486bf // indirect

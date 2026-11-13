@@ -90,7 +90,8 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 // login checks a NIP-98 event signed by the admin over this exact URL, with a
 // challenge from the login page, and starts a session.
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	if err := s.checkLogin(r); err != nil {
+	secure, err := s.checkLogin(r)
+	if err != nil {
 		s.log.Warn("admin login refused", "reason", err)
 		http.Error(w, "login refused", http.StatusUnauthorized)
 		return
@@ -108,59 +109,63 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: token, Path: "/", MaxAge: int(sessionLife / time.Second),
 		HttpOnly: true, SameSite: http.SameSiteStrictMode,
+		// Behind an HTTPS proxy, the browser must never send it over plain HTTP.
+		Secure: secure,
 	})
 	s.log.Info("admin logged in")
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) checkLogin(r *http.Request) error {
+// checkLogin reports whether the login came over HTTPS, as the signed URL says.
+// The signature binds it, so the browser's own view decides the cookie's Secure flag.
+func (s *Server) checkLogin(r *http.Request) (secure bool, err error) {
 	challenge := r.URL.Query().Get("challenge")
 	if !s.useChallenge(challenge) {
-		return errors.New("unknown, used or expired challenge")
+		return false, errors.New("unknown, used or expired challenge")
 	}
 	if s.adminKey == "" {
-		return errors.New("no admin key is set")
+		return false, errors.New("no admin key is set")
 	}
 	encoded, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Nostr ")
 	if !ok {
-		return errors.New("no Nostr authorization header")
+		return false, errors.New("no Nostr authorization header")
 	}
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
 	if err != nil {
-		return fmt.Errorf("authorization header: %w", err)
+		return false, fmt.Errorf("authorization header: %w", err)
 	}
 	event, err := nwc.VerifyEvent(raw)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if event.Kind != authKind {
-		return fmt.Errorf("event kind %d", event.Kind)
+		return false, fmt.Errorf("event kind %d", event.Kind)
 	}
 	if skew := s.now().Sub(event.CreatedAt); skew > clockSkew || skew < -clockSkew {
-		return fmt.Errorf("event time is %s off", skew)
+		return false, fmt.Errorf("event time is %s off", skew)
 	}
 	if methods := event.TagValues("method"); len(methods) != 1 || methods[0] != http.MethodPost {
-		return fmt.Errorf("method tags %q", methods)
+		return false, fmt.Errorf("method tags %q", methods)
 	}
 	urls := event.TagValues("u")
 	path := "://" + r.Host + "/login?challenge=" + challenge
 	if len(urls) != 1 || (urls[0] != "http"+path && urls[0] != "https"+path) {
-		return fmt.Errorf("u tags %q", urls)
+		return false, fmt.Errorf("u tags %q", urls)
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<10))
 	if err != nil {
-		return err
+		return false, err
 	}
 	digest := sha256.Sum256(body)
 	for _, payload := range event.TagValues("payload") {
 		if payload != hex.EncodeToString(digest[:]) {
-			return errors.New("payload tag does not match the body")
+			return false, errors.New("payload tag does not match the body")
 		}
 	}
 	if event.PubKey != s.adminKey {
-		return fmt.Errorf("key %s is not the admin key", event.PubKey)
+		return false, fmt.Errorf("key %s is not the admin key", event.PubKey)
 	}
-	return nil
+	return strings.HasPrefix(urls[0], "https:"), nil
 }
 
 func (s *Server) hasSession(r *http.Request) bool {

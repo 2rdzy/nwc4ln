@@ -88,8 +88,9 @@ func addAccount(
 	return fresh.connectionString, nil
 }
 
-// replaceConnection gives a sub-wallet a new connection and revokes the old one in one
-// step. The balance and history belong to the account, so they stay. The service key
+// replaceConnection gives an app or a sub-wallet a new connection and revokes the old
+// one in one step. The settings, limit usage, balance and history belong to the
+// account, so they stay. The service key
 // is new too, because the service finds a connection by that key. A receive-only
 // connection is not touched.
 func replaceConnection(ctx context.Context, db *sql.DB, accountID int64, relay string) (connectionString string, err error) {
@@ -104,7 +105,7 @@ func replaceConnection(ctx context.Context, db *sql.DB, accountID int64, relay s
 	defer func() { _ = tx.Rollback() }() // Does nothing after a commit.
 	var found bool
 	err = tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM accounts
-		WHERE id = ? AND type = 'sub_wallet' AND deleted_at IS NULL)`, accountID).Scan(&found)
+		WHERE id = ? AND deleted_at IS NULL)`, accountID).Scan(&found)
 	if err != nil {
 		return "", fmt.Errorf("find account: %w", err)
 	}

@@ -103,7 +103,17 @@ func (c *Client) Close() error { return c.conn.Close() }
 // macaroon sends the macaroon with each call, and only over TLS.
 type macaroon string
 
+// readMacaroon reads the macaroon, and refuses a file that others can read,
+// because the macaroon can pay from the node. lncli bakemacaroon writes mode 0644,
+// so the operator must chmod it.
 func readMacaroon(path string) (macaroon, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("lnd: macaroon file: %w", err)
+	}
+	if mode := info.Mode().Perm(); mode&0o077 != 0 {
+		return "", fmt.Errorf("lnd: macaroon file %s has mode %#o: allow the service user only (chmod 600)", path, mode)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("lnd: read macaroon: %w", err)

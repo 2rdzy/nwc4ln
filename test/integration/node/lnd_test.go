@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -66,6 +67,9 @@ func bake(t *testing.T, n *integration.Network, name string) string {
 		args = append(args, "uri:"+method)
 	}
 	if _, err := n.LNCLI(t.Context(), name, args...); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil { // lncli writes it readable by all.
 		t.Fatal(err)
 	}
 	return path

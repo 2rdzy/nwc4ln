@@ -290,3 +290,32 @@ func TestAddAppRefusesBadSettings(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// Catches: a leaked app key that still works after a replace, or a replace that resets
+// the app's limit or its usage, which would let the new key spend the limit again.
+func TestReplaceAppConnection(t *testing.T) {
+	e := newEnv(t)
+	limit := int64(100 * sat)
+	e.edit(func(s *ledger.AppSettings) { s.LimitMsat, s.Renewal = &limit, ledger.RenewNever })
+	if response := e.call(e.client, "pay_invoice", map[string]any{"invoice": e.node.OutsideInvoice(50 * sat)}); response.Error != nil {
+		t.Fatalf("pay: %+v", response.Error)
+	}
+	account := e.accountOf(e.client)
+	before, err := e.ledger.AppBudget(t.Context(), account)
+	if err != nil || before == nil {
+		t.Fatalf("budget %+v, %v", before, err)
+	}
+	connectionString, err := e.service.ReplaceConnection(t.Context(), account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, e.call(e.client, "get_info", nil), codeUnauthorized)
+	replaced, err := nwctest.Parse(connectionString)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := e.result(replaced, "get_budget", nil)
+	if budget["total_budget"] != float64(limit) || budget["used_budget"] != float64(before.UsedMsat) {
+		t.Fatalf("budget after replace %v, want total %d used %d", budget, limit, before.UsedMsat)
+	}
+}

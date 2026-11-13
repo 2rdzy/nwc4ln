@@ -21,6 +21,8 @@ type AppService interface {
 	AddApp(ctx context.Context, name string, settings ledger.AppSettings) (string, error)
 	EditApp(ctx context.Context, accountID int64, settings ledger.AppSettings) error
 	DeleteApp(ctx context.Context, accountID int64) error
+	// ReplaceConnection gives the app new keys and revokes the old ones.
+	ReplaceConnection(ctx context.Context, accountID int64) (string, error)
 }
 
 // recentTransactions is how many rows the app page shows.
@@ -133,6 +135,35 @@ func (s *Server) createApp(w http.ResponseWriter, r *http.Request) {
 		s.log.Error("draw QR code", "error", err)
 	}
 	s.render(w, "app_created.html", map[string]any{"Name": name, "ConnectionString": connectionString, "QR": qr})
+}
+
+func (s *Server) replaceAppPage(w http.ResponseWriter, r *http.Request) {
+	app, ok := s.app(w, r)
+	if !ok {
+		return
+	}
+	s.render(w, "app_replace.html", app)
+}
+
+// replaceApp shows the new connection string once, in its own response, as createApp
+// does. The old one stops working at once. Settings, usage and history stay.
+func (s *Server) replaceApp(w http.ResponseWriter, r *http.Request) {
+	app, ok := s.app(w, r)
+	if !ok {
+		return
+	}
+	connectionString, err := s.apps.ReplaceConnection(r.Context(), app.ID)
+	if err != nil {
+		s.changeFailed(w, err)
+		return
+	}
+	qr, err := qrSVG(connectionString)
+	if err != nil {
+		s.log.Error("draw QR code", "error", err)
+	}
+	s.render(w, "app_created.html", map[string]any{
+		"Name": app.Name, "ID": app.ID, "Replaced": true, "ConnectionString": connectionString, "QR": qr,
+	})
 }
 
 func (s *Server) appPage(w http.ResponseWriter, r *http.Request) {

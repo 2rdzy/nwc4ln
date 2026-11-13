@@ -465,7 +465,8 @@ func TestHostAndOrigin(t *testing.T) {
 func TestCookieHeadersAndLogout(t *testing.T) {
 	e := newEnv(t, &stubLedger{})
 	cookie := e.login()
-	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.MaxAge != 86_400 || cookie.Path != "/" {
+	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.MaxAge != 86_400 || cookie.Path != "/" ||
+		cookie.Secure {
 		t.Fatalf("cookie %+v", cookie)
 	}
 	response := e.do(http.MethodGet, "/", withCookie(cookie))
@@ -492,6 +493,22 @@ func TestCookieHeadersAndLogout(t *testing.T) {
 	}
 	if response := e.do(http.MethodGet, "/", withCookie(cookie)); response.StatusCode != http.StatusSeeOther {
 		t.Fatalf("old cookie still works after logout: %d", response.StatusCode)
+	}
+}
+
+// Catches: a session cookie the browser would also send over plain HTTP, when the
+// admin reaches the UI through an HTTPS proxy.
+func TestCookieSecureBehindHTTPS(t *testing.T) {
+	e := newEnv(t, &stubLedger{})
+	challenge := e.challenge()
+	response := e.loginWith(challenge, e.header(challenge, authEvent{url: "https://" + host + "/login?challenge=" + challenge}))
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("login: %d %s", response.StatusCode, body(t, response))
+	}
+	for _, cookie := range response.Cookies() {
+		if cookie.Name == sessionCookie && !cookie.Secure {
+			t.Fatalf("cookie %+v is not Secure", cookie)
+		}
 	}
 }
 
