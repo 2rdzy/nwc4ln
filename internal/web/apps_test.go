@@ -397,3 +397,30 @@ func TestFormatMsat(t *testing.T) {
 		}
 	}
 }
+
+// Catches: a leaked app key that still works after a replace from the UI, a replace
+// that changes the app's settings, or a page that does not show the new string.
+func TestAppReplaceConnection(t *testing.T) {
+	e := newAppsEnv(t)
+	_, oldSecret := e.create(url.Values{"name": {"shop"}, "limit": {"7"}, "renewal": {"daily"}, "can_pay": {"on"}})
+	app := e.apps()[0]
+	path := fmt.Sprintf("/apps/%d/replace", app.ID)
+	if response, page := e.get(path); response.StatusCode != http.StatusOK || !strings.Contains(page, "stops working at once") {
+		t.Fatalf("replace page: %d\n%s", response.StatusCode, page)
+	}
+	response := e.post(path, nil)
+	page := body(t, response)
+	match := connectionPattern.FindStringSubmatch(page)
+	if response.StatusCode != http.StatusOK || match == nil || match[1] == oldSecret || !strings.Contains(page, `id="replaced"`) {
+		t.Fatalf("replace: %d\n%s", response.StatusCode, page)
+	}
+	var live, all int
+	err := e.db.DB.QueryRow(`SELECT count(revoked_at IS NULL OR NULL), count(*) FROM connections WHERE account_id = ?`,
+		app.ID).Scan(&live, &all)
+	if err != nil || live != 1 || all != 2 {
+		t.Fatalf("%d live of %d connections, %v", live, all, err)
+	}
+	if after := e.apps()[0]; limitOf(after) != "7000" || after.Renewal != ledger.RenewDaily || !after.CanPay {
+		t.Fatalf("settings changed: %+v", after)
+	}
+}

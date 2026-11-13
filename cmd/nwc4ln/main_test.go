@@ -79,7 +79,7 @@ func TestInitFileModes(t *testing.T) {
 
 // A failure here means the operator gets a confusing failure instead of the cause.
 func TestStartRefusesWithoutInit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nwc4ln.toml")
+	path := filepath.Join(dataDir(t), "nwc4ln.toml")
 	err := run(context.Background(), []string{"start", "--config", path}, &bytes.Buffer{})
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("got %v", err)
@@ -95,7 +95,7 @@ func TestStartRefusesWithoutInit(t *testing.T) {
 
 // Catches: a second service on the same data folder.
 func TestStartRefusesWhileRunning(t *testing.T) {
-	dir := t.TempDir()
+	dir := dataDir(t)
 	path := filepath.Join(dir, "nwc4ln.toml")
 	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestUnknownCommandShowsUsage(t *testing.T) {
 // Runs the real binary. A failure here means a stop signal leaves the database
 // open: a clean close removes the WAL file.
 func TestStartExitsCleanlyOnSignal(t *testing.T) {
-	dir := t.TempDir()
+	dir := dataDir(t)
 	binary := filepath.Join(dir, "nwc4ln")
 	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v: %s", err, out)
@@ -215,7 +215,7 @@ func testCertificate(t *testing.T) []byte {
 // Catches: the service running with no way to hear a client.
 func TestStartRefusesBadRelay(t *testing.T) {
 	for _, relay := range []string{"", "https://relay.example", "127.0.0.1:7777"} {
-		path := filepath.Join(t.TempDir(), "nwc4ln.toml")
+		path := filepath.Join(dataDir(t), "nwc4ln.toml")
 		if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
 			t.Fatal(err)
 		}
@@ -232,7 +232,7 @@ func TestStartRefusesBadRelay(t *testing.T) {
 // Catches: start using the LND client, or no client, when the config names Core
 // Lightning. The rune file may not be readable by others, and start must say so.
 func TestStartUsesTheConfiguredNode(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nwc4ln.toml")
+	path := filepath.Join(dataDir(t), "nwc4ln.toml")
 	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestStartUsesTheConfiguredNode(t *testing.T) {
 
 // Catches: a backup that refuses, or waits, while the service holds the data folder.
 func TestBackupWhileRunning(t *testing.T) {
-	dir := t.TempDir()
+	dir := dataDir(t)
 	path := filepath.Join(dir, "nwc4ln.toml")
 	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
 		t.Fatal(err)
@@ -312,7 +312,7 @@ func TestAdminKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
+	dir := dataDir(t)
 	path := filepath.Join(dir, "nwc4ln.toml")
 	if err := run(t.Context(), []string{"init", "--admin", "npub1nonsense", "--config", path}, io.Discard); err == nil {
 		t.Fatal("init took a bad npub")
@@ -348,5 +348,66 @@ func TestAdminKey(t *testing.T) {
 	}
 	if got := adminKeyIn(t, dir); got != second {
 		t.Fatalf("admin key %q after set-admin, want %q", got, second)
+	}
+}
+
+// dataDir is an empty folder only its owner can change, as init makes one. t.TempDir
+// follows the umask, which can let the group write.
+func dataDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// Catches: start, backup or set-admin running on a database other users can read, or
+// on a config or data folder they can change.
+func TestFileModes(t *testing.T) {
+	cases := []struct {
+		name string
+		file func(dir string) string
+		mode os.FileMode
+	}{
+		{"DatabaseReadable", func(dir string) string { return filepath.Join(dir, databaseName) }, 0o644},
+		{"WALReadable", func(dir string) string { return filepath.Join(dir, databaseName+"-wal") }, 0o640},
+		{"ConfigWritable", func(dir string) string { return filepath.Join(dir, "nwc4ln.toml") }, 0o622},
+		{"FolderWritable", func(dir string) string { return dir }, 0o770},
+	}
+	testNpub, err := nwc.EncodeNpub(strings.Repeat("ab", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			dir := dataDir(t)
+			path := filepath.Join(dir, "nwc4ln.toml")
+			if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			writeServiceConfig(t, path, "ws://127.0.0.1:1")
+			target := test.file(dir)
+			if _, err := os.Stat(target); os.IsNotExist(err) {
+				if err := os.WriteFile(target, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Chmod(target, test.mode); err != nil {
+				t.Fatal(err)
+			}
+			for _, args := range [][]string{
+				{"start", "--config", path},
+				{"backup", "--config", path, filepath.Join(t.TempDir(), "backup.db")},
+				{"set-admin", "--config", path, testNpub},
+			} {
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+				err := run(ctx, args, io.Discard)
+				cancel()
+				if err == nil || !strings.Contains(err.Error(), target) {
+					t.Errorf("%s: got %v, want a refusal naming %s", args[0], err, target)
+				}
+			}
+		})
 	}
 }

@@ -106,6 +106,8 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("POST /apps", s.createApp)
 	mux.HandleFunc("GET /apps/{id}", s.appPage)
 	mux.HandleFunc("POST /apps/{id}", s.editApp)
+	mux.HandleFunc("GET /apps/{id}/replace", s.replaceAppPage)
+	mux.HandleFunc("POST /apps/{id}/replace", s.replaceApp)
 	mux.HandleFunc("GET /apps/{id}/delete", s.deleteAppPage)
 	mux.HandleFunc("POST /apps/{id}/delete", s.deleteApp)
 	mux.HandleFunc("GET /subwallets", s.subWalletsPage)

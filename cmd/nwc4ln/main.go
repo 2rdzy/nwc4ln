@@ -151,8 +151,39 @@ func newNode(cfg config.Config) (nodeClient, error) {
 	return lnd.New(lnd.Config{Host: cfg.LNDHost, TLSCertPath: cfg.LNDTLSCertPath, MacaroonPath: cfg.LNDMacaroonPath})
 }
 
-func runStart(ctx context.Context, configPath string, out io.Writer) (err error) {
+// checkFiles refuses to run on files other users can read or change: the database
+// holds the wallet service keys, and the config names the node and its macaroon.
+// The node clients check the macaroon and the rune themselves.
+func checkFiles(configPath string, cfg config.Config) error {
+	database := filepath.Join(cfg.DataDir, databaseName)
+	for _, check := range []struct {
+		run  func(string) error
+		path string
+	}{
+		{config.CheckNotShared, configPath},
+		{config.CheckNotShared, cfg.DataDir},
+		{config.CheckPrivate, database},
+		{config.CheckPrivate, database + "-wal"},
+		{config.CheckPrivate, database + "-shm"},
+	} {
+		if err := check.run(check.path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// loadChecked loads the config, then checks the files it names.
+func loadChecked(configPath string) (config.Config, error) {
 	cfg, err := config.Load(configPath)
+	if err != nil {
+		return config.Config{}, err
+	}
+	return cfg, checkFiles(configPath, cfg)
+}
+
+func runStart(ctx context.Context, configPath string, out io.Writer) (err error) {
+	cfg, err := loadChecked(configPath)
 	if err != nil {
 		return err
 	}
@@ -223,7 +254,7 @@ func runStart(ctx context.Context, configPath string, out io.Writer) (err error)
 // runBackup writes a copy of the database to a new file. It takes no lock, so it works
 // while the service runs.
 func runBackup(ctx context.Context, configPath, dest string, out io.Writer) error {
-	cfg, err := config.Load(configPath)
+	cfg, err := loadChecked(configPath)
 	if err != nil {
 		return err
 	}
@@ -242,7 +273,7 @@ func runSetAdmin(ctx context.Context, configPath, npub string, out io.Writer) (e
 	if err != nil {
 		return err
 	}
-	cfg, err := config.Load(configPath)
+	cfg, err := loadChecked(configPath)
 	if err != nil {
 		return err
 	}

@@ -5,6 +5,7 @@ package nwc_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -36,6 +37,9 @@ func setNode(t *testing.T, n *integration.Network, cfg *config.Config, dir strin
 	}
 	if out, err := n.LNCLI(t.Context(), self, args...); err != nil {
 		t.Fatalf("bake macaroon: %v: %s", err, out)
+	}
+	if err := os.Chmod(macaroon, 0o600); err != nil { // lncli writes it readable by all.
+		t.Fatal(err)
 	}
 	cfg.LNDHost = n.LNDHost(self)
 	cfg.LNDTLSCertPath = filepath.Join(n.LNDDir(self), "tls.cert")

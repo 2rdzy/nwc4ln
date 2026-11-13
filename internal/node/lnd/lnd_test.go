@@ -314,3 +314,20 @@ func TestMacaroon(t *testing.T) {
 		t.Error("macaroon allowed without TLS")
 	}
 }
+
+// Catches: a macaroon other users on the machine can read, and so pay with. lncli
+// bakemacaroon writes mode 0644.
+func TestMacaroonReadableByOthersIsRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m")
+	for _, mode := range []os.FileMode{0o644, 0o640, 0o604} {
+		if err := os.WriteFile(path, []byte{0xab}, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readMacaroon(path); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+			t.Errorf("mode %#o: got %v", mode, err)
+		}
+	}
+}
