@@ -134,6 +134,27 @@ func TestInFlightRaisesNoShortfall(t *testing.T) {
 		}
 	}
 	if got := shortfall(t, money); got != 0 {
+		if integration.IsCLN(self) {
+			out, _ := n.CLNCLI(ctx, self, "listpeerchannels")
+			var list struct {
+				Channels []struct {
+					Opener  string `json:"opener"`
+					ToUs    int64  `json:"to_us_msat"`
+					LastFee int64  `json:"last_tx_fee_msat"`
+					HTLCs   []struct {
+						Direction string `json:"direction"`
+						State     string `json:"state"`
+						Amount    int64  `json:"amount_msat"`
+					} `json:"htlcs"`
+				} `json:"channels"`
+			}
+			_ = json.Unmarshal(out, &list)
+			for _, c := range list.Channels {
+				t.Logf("channel opener %s, to_us %d, last_tx_fee %d, htlcs %+v", c.Opener, c.ToUs, c.LastFee, c.HTLCs)
+			}
+			time.Sleep(2 * time.Second)
+			t.Logf("shortfall 2 seconds later: %d", shortfall(t, money))
+		}
 		t.Errorf("shortfall %d with the payment in flight", got)
 	}
 	if got, err := money.MainAvailable(ctx); err != nil || got != 0 {

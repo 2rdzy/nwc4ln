@@ -491,8 +491,17 @@ func (n *Network) WaitCLN(ctx context.Context) error {
 
 // waitFor polls check until it passes. If node is set and has died, it stops
 // early rather than waiting for the timeout.
+// waitLimit is how long to wait for a node to be ready: 2 minutes, or NWC4LN_IT_WAIT.
+// After hours of soak, a node's database is large and a restart takes longer.
+func waitLimit() time.Duration {
+	if d, err := time.ParseDuration(os.Getenv("NWC4LN_IT_WAIT")); err == nil && d > 0 {
+		return d
+	}
+	return 2 * time.Minute
+}
+
 func (n *Network) waitFor(ctx context.Context, node, what string, check func() error) error {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, waitLimit())
 	defer cancel()
 	for {
 		err := check()

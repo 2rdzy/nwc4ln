@@ -397,8 +397,8 @@ func channelJSON(fields map[string]any) map[string]any {
 		"our_reserve_msat": 10_000_000, "last_tx_fee_msat": 1_626_000, "dust_limit_msat": 546_000,
 		"feerate": map[string]any{"perkw": 1250}, "channel_type": map[string]any{"bits": []int{12, 22}},
 		"htlcs": []map[string]any{
-			{"direction": "out", "amount_msat": 20_000_000, "payment_hash": "aa"},
-			{"direction": "in", "amount_msat": 5_000_000, "payment_hash": "bb"},
+			{"direction": "out", "amount_msat": 20_000_000, "payment_hash": "aa", "state": "SENT_ADD_ACK_REVOCATION"},
+			{"direction": "in", "amount_msat": 5_000_000, "payment_hash": "bb", "state": "RCVD_ADD_ACK_REVOCATION"},
 		},
 	}
 	for key, value := range fields {
@@ -440,14 +440,29 @@ func TestSpendable(t *testing.T) {
 		// Any HTLC with an output brings both anchors back.
 		{"PeerHasNoOutputButHTLC", []map[string]any{channelJSON(map[string]any{"to_us_msat": 999_999_000,
 			"last_tx_fee_msat": 3_146_000, "htlcs": []map[string]any{
-				{"direction": "out", "amount_msat": 20_000_000, "payment_hash": "aa"}}})},
+				{"direction": "out", "amount_msat": 20_000_000, "payment_hash": "aa", "state": "SENT_ADD_ACK_REVOCATION"}}})},
 			999_999_000 - 20_000_000 - 3_146_000 - 660_000 - 10_000_000, 999_999_000 - 20_000_000 - 3_146_000 - 660_000 - 10_000_000,
 			[]node.HTLC{htlc}},
+		// Found in CI after a soak: an HTLC is listed from the moment it is offered, but
+		// last_tx_fee_msat covers it only once it is in our commitment. Before that, and
+		// while it is being removed, its fee must not be added back, or the node reads
+		// 430 sat richer than it is. Nor does it bring the peer's anchor back yet.
+		{"HTLCNotYetInOurCommitment", []map[string]any{channelJSON(map[string]any{"htlcs": []map[string]any{
+			{"direction": "out", "amount_msat": 20_000_000, "payment_hash": "aa", "state": "SENT_ADD_HTLC"}}})},
+			opened, opened, []node.HTLC{{Hash: "aa", AmountMsat: 20_000_000, CostMsat: 20_000_000, Active: true}}},
+		{"HTLCLeavingOurCommitment", []map[string]any{channelJSON(map[string]any{"htlcs": []map[string]any{
+			{"direction": "out", "amount_msat": 20_000_000, "payment_hash": "aa", "state": "RCVD_REMOVE_COMMIT"}}})},
+			opened, opened, []node.HTLC{{Hash: "aa", AmountMsat: 20_000_000, CostMsat: 20_000_000, Active: true}}},
+		{"PeerHasNoOutputHTLCNotYetCommitted", []map[string]any{channelJSON(map[string]any{"to_us_msat": 999_999_000,
+			"last_tx_fee_msat": 3_146_000, "htlcs": []map[string]any{
+				{"direction": "out", "amount_msat": 20_000_000, "payment_hash": "aa", "state": "SENT_ADD_COMMIT"}}})},
+			999_999_000 - 20_000_000 - 3_146_000 - 330_000 - 10_000_000, 999_999_000 - 20_000_000 - 3_146_000 - 330_000 - 10_000_000,
+			[]node.HTLC{{Hash: "aa", AmountMsat: 20_000_000, CostMsat: 20_000_000, Active: true}}},
 		{"PeerNearDust", []map[string]any{channelJSON(map[string]any{"to_us_msat": 999_500_000, "htlcs": nil,
 			"last_tx_fee_msat": 3_146_000})},
 			999_500_000 - 3_146_000 - 660_000 - 10_000_000, 999_500_000 - 3_146_000 - 660_000 - 10_000_000, nil},
 		{"DustHTLC", []map[string]any{channelJSON(map[string]any{"htlcs": []map[string]any{
-			{"direction": "out", "amount_msat": 545_999, "payment_hash": "aa"}}})},
+			{"direction": "out", "amount_msat": 545_999, "payment_hash": "aa", "state": "SENT_ADD_ACK_REVOCATION"}}})},
 			700_000_000 - 545_999 - 1_626_000 - 660_000 - 10_000_000, 700_000_000 - 545_999 - 1_626_000 - 660_000 - 10_000_000,
 			[]node.HTLC{{Hash: "aa", AmountMsat: 545_999, CostMsat: 545_999, Active: true}}},
 	}

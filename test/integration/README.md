@@ -32,12 +32,15 @@ Needs Linux `amd64`, `git` and Go. Versions are pinned in [versions.env](version
 
 `nwc/long_test.go` has a random soak (`TestSoak`), a crash loop on the real binary (`TestCrashLoop`) and node and
 relay outages (`TestOutages`). By default they run a short version, as PR CI does. The environment sets their length,
-listed at the top of that file. `scripts/longtests.sh` starts a network, runs the three, and stops it:
+listed at the top of that file. `scripts/longtests.sh` starts a network for each node in `NWC4LN_LONG_NODES`, runs the
+three, saves the logs and stops it. A failure on one node does not stop the next:
 
 ```sh
-NWC4LN_SOAK_FOR=6h scripts/longtests.sh
-NWC4LN_IT_NODE=cln NWC4LN_SOAK_FOR=24h NWC4LN_CRASH_FOR=1h scripts/longtests.sh
+export PATH=$HOME/.local/go-1.26.2/bin:$PATH   # if go is not on PATH already
+NWC4LN_IT_DIR=$HOME/nwc4ln-it NWC4LN_LONG_LOGS=$HOME/nwc4ln-long \
+  NWC4LN_LONG_NODES="lnd cln" NWC4LN_SOAK_FOR=6h scripts/longtests.sh
 ```
 
 For runs of hours, set `NWC4LN_IT_DIR` to a folder on disk. A failed soak prints its seed: `NWC4LN_LONG_SEED` replays
-it. The weekly `longtests` workflow runs an hour on each node, and can be started by hand with another length.
+it. After a long soak a node's restart takes longer: raise `NWC4LN_IT_WAIT` (default 2m) if the outage test times out
+waiting for it. The weekly `longtests` workflow runs an hour on each node, and can be started by hand with another length.

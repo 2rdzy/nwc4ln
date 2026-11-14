@@ -338,11 +338,28 @@ type channel struct {
 	Type struct {
 		Bits []int `json:"bits"`
 	} `json:"channel_type"`
-	HTLCs []struct {
-		Direction  string `json:"direction"`
-		AmountMsat int64  `json:"amount_msat"`
-		Hash       string `json:"payment_hash"`
-	} `json:"htlcs"`
+	HTLCs []clnHTLC `json:"htlcs"`
+}
+
+type clnHTLC struct {
+	Direction  string `json:"direction"`
+	AmountMsat int64  `json:"amount_msat"`
+	Hash       string `json:"payment_hash"`
+	State      string `json:"state"`
+}
+
+// inOurCommitment reports whether an outgoing HTLC is in our latest commitment
+// transaction, the one last_tx_fee_msat is the fee of. Core Lightning lists an HTLC
+// from the moment it is offered until it is gone, but only these states carry
+// HTLC_LOCAL_F_COMMITTED (common/htlc_state.c). Before and after them, the HTLC has
+// left to_us_msat's spendable part and yet its output is not in that transaction, so
+// counting its fee would overstate the node by it.
+func (h clnHTLC) inOurCommitment() bool {
+	switch h.State {
+	case "RCVD_ADD_ACK_COMMIT", "SENT_ADD_ACK_REVOCATION", "RCVD_REMOVE_HTLC":
+		return true
+	}
+	return false
 }
 
 // Spendable implements node.Node.
@@ -394,11 +411,12 @@ func spendable(channels []channel) (node.Spendable, error) {
 				continue
 			}
 			local -= htlc.AmountMsat
+			cost := htlc.AmountMsat
+			if htlc.inOurCommitment() {
+				cost += htlcFeeMsat(opener, anchors, ch.Feerate.PerKW, ch.DustMsat, htlc.AmountMsat)
+			}
 			total.Outgoing = append(total.Outgoing, node.HTLC{
-				Hash:       htlc.Hash,
-				AmountMsat: htlc.AmountMsat,
-				CostMsat:   htlc.AmountMsat + htlcFeeMsat(opener, anchors, ch.Feerate.PerKW, ch.DustMsat, htlc.AmountMsat),
-				Active:     active,
+				Hash: htlc.Hash, AmountMsat: htlc.AmountMsat, CostMsat: cost, Active: active,
 			})
 		}
 		free := max(local-*ch.ReserveMsat, 0)
@@ -416,7 +434,7 @@ func spendable(channels []channel) (node.Spendable, error) {
 // near a dust limit, the anchor counts, so the figure errs low.
 func anchorCount(ch channel, outgoing int64) int64 {
 	for _, htlc := range ch.HTLCs {
-		if htlc.AmountMsat >= minDustMsat {
+		if htlc.AmountMsat >= minDustMsat && (htlc.Direction != "out" || htlc.inOurCommitment()) {
 			return 2
 		}
 	}
