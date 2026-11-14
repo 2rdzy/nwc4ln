@@ -15,6 +15,7 @@ package nwc_test
 //	NWC4LN_OUTAGE_ROUNDS  how many node and relay outages
 //	NWC4LN_LONG_SEED      the random seed, to replay a run
 //	NWC4LN_LONG_REPORT    a file the soak writes its counts to, as JSON
+//	NWC4LN_IT_WAIT        how long the harness waits for a node after a restart (default 2m)
 
 import (
 	"context"
@@ -148,13 +149,25 @@ func outcome(op string, response *nwctest.Response, err error) (string, bool) {
 // soakAccount is one account a worker drives over NWC. Its pace stays under the
 // service's own limits (5 requests a second, 10 invoices a minute), so that the soak
 // measures work done, not refusals.
+//
+// An account that reaches the daily invoice cap (1,000 in 24 hours) is replaced by a
+// fresh one of the same kind, so that a run of hours keeps moving money.
 type soakAccount struct {
 	name     string
-	id       int64
 	wallet   bool
-	client   *nwctest.Client
 	requests *rate.Limiter
 	invoices *rate.Limiter
+
+	mu      sync.Mutex
+	id      int64
+	client  *nwctest.Client
+	renewed int
+}
+
+func (a *soakAccount) current() (*nwctest.Client, int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.client, a.id
 }
 
 // call sends one request, with the wait a client allows.
@@ -164,7 +177,14 @@ func (a *soakAccount) call(ctx context.Context, method string, params any) (*nwc
 	}
 	ctx, cancel := context.WithTimeout(ctx, 65*time.Second)
 	defer cancel()
-	return a.client.CallWith(ctx, nwctest.NIP44, method, params)
+	client, _ := a.current()
+	return client.CallWith(ctx, nwctest.NIP44, method, params)
+}
+
+// atCap reports a refusal for the daily invoice cap, not for the rate.
+func atCap(response *nwctest.Response) bool {
+	return response != nil && response.Error != nil && response.Error.Code == "RATE_LIMITED" &&
+		strings.Contains(response.Error.Message, "expire")
 }
 
 // invoice asks the account for an invoice, and returns it, or "" if refused.
@@ -203,24 +223,33 @@ func steadyAll(t *testing.T, lightning node.Node) int64 {
 
 // waitNoPendingPayments waits until no payment is pending in the ledger. Unpaid
 // invoices may stay open, and do not count.
-func waitNoPendingPayments(t *testing.T, money *ledger.Ledger, limit time.Duration) {
+// On a timeout it reports each stuck row and what the node and the payee say about it.
+func waitNoPendingPayments(t *testing.T, n *integration.Network, money *ledger.Ledger, lightning node.Node,
+	limit time.Duration) {
 	t.Helper()
 	for deadline := time.Now().Add(limit); ; time.Sleep(2 * time.Second) {
 		rows, _, err := money.AllHistory(t.Context(), ledger.AllHistoryQuery{AccountID: ledger.AllAccounts})
 		if err != nil {
 			t.Fatal(err)
 		}
-		pending := 0
+		var pending []ledger.Transaction
 		for _, row := range rows {
 			if row.Type == ledger.TypeOutgoing && row.State == ledger.StatePending {
-				pending++
+				pending = append(pending, row)
 			}
 		}
-		if pending == 0 {
+		if len(pending) == 0 {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("%d payments still pending after %s", pending, limit)
+			for _, row := range pending {
+				payment, err := lightning.TrackPayment(t.Context(), row.PaymentHash)
+				payee, _ := n.LNCLI(t.Context(), other, "lookupinvoice", row.PaymentHash)
+				t.Logf("stuck %s: created %s, internal %v, amount %d; node says state %d (%v); payee says %s",
+					row.PaymentHash, row.CreatedAt.Format(time.TimeOnly), row.Internal, row.AmountMsat, payment.State, err,
+					strings.Join(strings.Fields(string(payee)), " "))
+			}
+			t.Fatalf("%d payments still pending after %s", len(pending), limit)
 		}
 	}
 }
@@ -283,9 +312,21 @@ func TestSoak(t *testing.T) {
 	before := steadyAll(t, lightning)
 	flowBefore := ledgerFlow(t, money)
 
-	var accounts []*soakAccount
-	add := func(name string, wallet bool) {
-		t.Helper()
+	var counts tally
+	var (
+		closeMu sync.Mutex
+		toClose []*nwctest.Client
+	)
+	defer func() {
+		closeMu.Lock()
+		defer closeMu.Unlock()
+		for _, c := range toClose {
+			c.Close()
+		}
+	}()
+	// open makes an account of one kind, and returns its connected client and, for a
+	// sub-wallet, its ID.
+	open := func(name string, wallet bool) (*nwctest.Client, int64, error) {
 		var connectionString string
 		var err error
 		if wallet {
@@ -296,17 +337,41 @@ func TestSoak(t *testing.T) {
 			connectionString, err = service.AddApp(ctx, name, settings)
 		}
 		if err != nil {
-			t.Fatal(err)
+			return nil, 0, err
 		}
 		client, err := nwctest.Parse(connectionString)
 		if err != nil {
-			t.Fatal(err)
+			return nil, 0, err
 		}
 		if err := client.Connect(ctx); err != nil {
+			return nil, 0, err
+		}
+		closeMu.Lock()
+		toClose = append(toClose, client)
+		closeMu.Unlock()
+		var id int64
+		if wallet {
+			wallets, err := money.SubWallets(ctx)
+			if err != nil {
+				return nil, 0, err
+			}
+			for _, w := range wallets {
+				if w.Name == name {
+					id = w.ID
+				}
+			}
+		}
+		return client, id, nil
+	}
+	var accounts []*soakAccount
+	add := func(name string, wallet bool) {
+		t.Helper()
+		client, id, err := open(name, wallet)
+		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(client.Close)
-		accounts = append(accounts, &soakAccount{name: name, wallet: wallet, client: client,
+		waitForInfo(t, client)
+		accounts = append(accounts, &soakAccount{name: name, wallet: wallet, client: client, id: id,
 			requests: rate.NewLimiter(4, 4), invoices: rate.NewLimiter(rate.Every(7*time.Second), 9)})
 	}
 	for i := range envInt(t, "NWC4LN_SOAK_APPS", 2) {
@@ -315,22 +380,21 @@ func TestSoak(t *testing.T) {
 	for i := range envInt(t, "NWC4LN_SOAK_WALLETS", 3) {
 		add(fmt.Sprintf("wallet-%d", i), true)
 	}
-	wallets, err := money.SubWallets(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, a := range accounts {
-		for _, w := range wallets {
-			if a.wallet && w.Name == a.name {
-				a.id = w.ID
-			}
+	// renew replaces an account that reached the daily invoice cap. A sub-wallet's money
+	// stays in the old one, and the cleanup at the end moves it back.
+	renew := func(a *soakAccount) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.renewed++
+		client, id, err := open(fmt.Sprintf("%s-%d", a.name, a.renewed), a.wallet)
+		if err != nil {
+			counts.add("renew failed")
+			return
 		}
-	}
-	for _, a := range accounts {
-		waitForInfo(t, a.client)
+		a.client, a.id = client, id
+		counts.add("account renewed at the daily invoice cap")
 	}
 
-	var counts tally
 	var bugs atomic.Int64
 	note := func(op string, response *nwctest.Response, err error) {
 		key, ok := outcome(op, response, err)
@@ -356,6 +420,10 @@ func TestSoak(t *testing.T) {
 				case (pick < 30 || net.Load() < -drift) && net.Load() < drift && a.invoices.Allow():
 					// Money in from outside.
 					invoice, _, response, err := a.invoice(ctx, amount)
+					if atCap(response) {
+						renew(a)
+						continue
+					}
 					if invoice == "" {
 						note("make_invoice", response, err)
 						continue
@@ -386,6 +454,10 @@ func TestSoak(t *testing.T) {
 					// Money to another account on this node.
 					to := accounts[pick%len(accounts)]
 					invoice, _, response, err := to.invoice(ctx, amount)
+					if atCap(response) {
+						renew(to)
+						continue
+					}
 					if invoice == "" {
 						note("make_invoice", response, err)
 						continue
@@ -419,11 +491,12 @@ func TestSoak(t *testing.T) {
 			a := walletAccounts[r.IntN(len(walletAccounts))]
 			amount := int64(1+r.IntN(200)) * 1000
 			var err error
+			_, id := a.current()
 			if r.IntN(2) == 0 {
-				_, err = money.Fund(ctx, a.id, amount)
+				_, err = money.Fund(ctx, id, amount)
 				counts.add(fmt.Sprintf("fund %v", err == nil))
 			} else {
-				_, err = money.Withdraw(ctx, a.id, amount)
+				_, err = money.Withdraw(ctx, id, amount)
 				counts.add(fmt.Sprintf("withdraw %v", err == nil))
 			}
 		}
@@ -442,7 +515,7 @@ func TestSoak(t *testing.T) {
 	if bugs.Load() > 0 {
 		t.FailNow()
 	}
-	waitNoPendingPayments(t, money, 5*time.Minute)
+	waitNoPendingPayments(t, n, money, lightning, 5*time.Minute)
 	checkClean(t, money, time.Unix(0, 0))
 	nodeDelta := steadyAll(t, lightning) - before
 	ledgerDelta := ledgerFlow(t, money) - flowBefore
@@ -452,6 +525,83 @@ func TestSoak(t *testing.T) {
 		t.Fatalf("node changed by %d msat, the ledger by %d msat: %d msat unaccounted", nodeDelta, ledgerDelta, diff)
 	}
 	t.Logf("node changed by %d msat, the ledger by %d msat", nodeDelta, ledgerDelta)
+	// Leave the main wallet with the money, so that a test after this one can pay from an
+	// app: sub-wallet money is set aside from it.
+	wallets, err := money.SubWallets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range wallets {
+		if w.BalanceMsat <= 0 {
+			continue
+		}
+		if row, err := money.Withdraw(ctx, w.ID, w.BalanceMsat); err != nil || row.State != ledger.StateSettled {
+			t.Fatalf("withdraw %s: %+v, %v", w.Name, row, err)
+		}
+	}
+}
+
+// needFunds stops a test whose app has too little to spend, with the reason, rather
+// than let it fail later in a way that reads like a bug in nwc4ln. An app spends from
+// the main wallet, which an earlier test may have moved into sub-wallets.
+func needFunds(t *testing.T, client *nwctest.Client, msat int64) {
+	t.Helper()
+	var balance struct {
+		Balance int64 `json:"balance"`
+	}
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
+		ctx, cancel := context.WithTimeout(t.Context(), callTimeout)
+		response, err := client.Call(ctx, nwctest.NIP44, "get_balance")
+		cancel()
+		if err == nil && response.Error == nil && json.Unmarshal(response.Result, &balance) == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("get_balance: %+v, %v", response, err)
+		}
+	}
+	if balance.Balance < msat {
+		t.Fatalf("the app can spend %d msat, and this test needs %d: an earlier test left the node's money "+
+			"elsewhere, such as in sub-wallets", balance.Balance, msat)
+	}
+}
+
+// waitNodeAgrees waits until every pending payment in the ledger is one the node still
+// has in flight. That is the rule after an outage: a payment between two nodes can stay
+// in flight for as long as a channel needs to settle it, and on regtest no block ends it,
+// so the ledger rightly keeps its hold. A row the node has finished must not stay pending.
+func waitNodeAgrees(t *testing.T, money *ledger.Ledger, lightning node.Node, limit time.Duration) {
+	t.Helper()
+	for deadline := time.Now().Add(limit); ; time.Sleep(2 * time.Second) {
+		rows, _, err := money.AllHistory(t.Context(), ledger.AllHistoryQuery{AccountID: ledger.AllAccounts})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wrong, inFlight []string
+		for _, row := range rows {
+			if row.Type != ledger.TypeOutgoing || row.State != ledger.StatePending {
+				continue
+			}
+			payment, err := lightning.TrackPayment(t.Context(), row.PaymentHash)
+			switch {
+			case err != nil:
+				wrong = append(wrong, fmt.Sprintf("%s: %v", row.PaymentHash, err))
+			case payment.State == node.PaymentInFlight:
+				inFlight = append(inFlight, row.PaymentHash)
+			default:
+				wrong = append(wrong, fmt.Sprintf("%s: pending, node says state %d", row.PaymentHash, payment.State))
+			}
+		}
+		if len(wrong) == 0 {
+			for _, hash := range inFlight {
+				t.Logf("still in flight at the node, hold kept: %s", hash)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after %s, rows the node has finished are still pending:\n%s", limit, strings.Join(wrong, "\n"))
+		}
+	}
 }
 
 // lookupWithin is lookupUntil with a longer wait.
@@ -497,6 +647,7 @@ func TestCrashLoop(t *testing.T) {
 	}
 	defer client.Close()
 	waitForInfo(t, client)
+	needFunds(t, client, 100_000_000)
 
 	deadline := time.Now().Add(runFor)
 	for round := 0; round < kills || time.Now().Before(deadline); round++ {
@@ -544,8 +695,9 @@ func TestCrashLoop(t *testing.T) {
 	}
 }
 
-// Catches: a service that goes deaf, a payment marked failed that later went out, or a
-// hold that never clears, after the node and then the relay go away under load.
+// Catches: a service that goes deaf, a payment marked failed that later went out, a
+// hold that never clears, or a payment in flight across the node's restart that the
+// ledger does not follow up, after the node and then the relay go away under load.
 func TestOutages(t *testing.T) {
 	n, err := integration.Load(integration.DefaultConfig())
 	if err != nil {
@@ -572,6 +724,7 @@ func TestOutages(t *testing.T) {
 	}
 	defer client.Close()
 	waitForInfo(t, client)
+	needFunds(t, client, 100_000_000)
 
 	var counts tally
 	stop := make(chan struct{})
@@ -601,6 +754,19 @@ func TestOutages(t *testing.T) {
 	for range rounds {
 		for _, down := range []string{self, integration.NodeRelay} {
 			time.Sleep(3 * time.Second)
+			// Across the node's restart, a payment the payee holds: the ledger must follow
+			// it up after the restart, and settle it once the payee does.
+			var preimage string
+			if down == self {
+				var request, hash string
+				request, hash, preimage = holdInvoice(t, n)
+				go func() {
+					callCtx, cancelCall := context.WithTimeout(ctx, 65*time.Second)
+					defer cancelCall()
+					_, _ = client.CallWith(callCtx, nwctest.NIP44, "pay_invoice", map[string]string{"invoice": request})
+				}()
+				waitHeld(t, n, hash)
+			}
 			if err := n.StopNode(down); err != nil {
 				t.Fatal(err)
 			}
@@ -612,6 +778,7 @@ func TestOutages(t *testing.T) {
 				if err := waitReady(ctx, n); err != nil {
 					t.Fatal(err)
 				}
+				settleHeld(t, n, preimage)
 			}
 		}
 	}
@@ -635,6 +802,6 @@ func TestOutages(t *testing.T) {
 			t.Fatalf("service deaf after the outages: %v", last)
 		}
 	}
-	waitNoPendingPayments(t, money, 5*time.Minute)
+	waitNodeAgrees(t, money, nodeClient(t, n, t.TempDir()), 5*time.Minute)
 	checkClean(t, money, time.Unix(0, 0))
 }

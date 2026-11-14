@@ -52,7 +52,7 @@ jobs:
         run: scripts/longtests.sh
       - name: Show logs
         if: failure()
-        run: tail -n 80 "$NWC4LN_LONG_LOGS"/long.log "$NWC4LN_IT_DIR"/*.log
+        run: tail -n 80 "$NWC4LN_LONG_LOGS"/*/long.log "$NWC4LN_LONG_LOGS"/*/*.log
 
   fuzz:
     name: fuzz
