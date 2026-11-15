@@ -16,6 +16,7 @@ package nwc_test
 //	NWC4LN_LONG_SEED      the random seed, to replay a run
 //	NWC4LN_LONG_REPORT    a file the soak writes its counts to, as JSON
 //	NWC4LN_IT_WAIT        how long the harness waits for a node after a restart (default 2m)
+//	NWC4LN_BLOCK_EVERY    how often a block is mined (default 30m), so that LND stays synced
 
 import (
 	"context"
@@ -145,6 +146,51 @@ func outcome(op string, response *nwctest.Response, err error) (string, bool) {
 		return op + " " + response.Error.Code, !slices.Contains(bad, response.Error.Code)
 	}
 }
+
+// keepChainFresh mines a block now, then every NWC4LN_BLOCK_EVERY (30 minutes by
+// default), until the test ends. It returns when the last block was mined. LND says
+// it is not synced once the newest block is 2 hours old, and nwc4ln then refuses
+// payments out, so on a quiet regtest chain a long run would test only refusals.
+func keepChainFresh(t *testing.T, n *integration.Network) (lastMined func() time.Time) {
+	t.Helper()
+	every := envDuration(t, "NWC4LN_BLOCK_EVERY", 30*time.Minute)
+	var last atomic.Int64
+	mine := func(ctx context.Context) error {
+		if err := n.Mine(ctx, 1); err != nil {
+			return err
+		}
+		last.Store(time.Now().UnixNano())
+		return nil
+	}
+	if err := mine(t.Context()); err != nil {
+		t.Fatalf("mine a block: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(every):
+			}
+			if err := mine(ctx); err != nil && ctx.Err() == nil {
+				t.Logf("mine a block: %v", err)
+			}
+		}
+	}()
+	return func() time.Time { return time.Unix(0, last.Load()) }
+}
+
+// syncGrace is how long after a new block nwc4ln may still refuse payments as
+// catching up: the node takes a moment to read the block, and the ledger rereads
+// the node's sync state on each sweep.
+const syncGrace = 30 * time.Second
 
 // soakAccount is one account a worker drives over NWC. Its pace stays under the
 // service's own limits (5 requests a second, 10 invoices a minute), so that the soak
@@ -301,6 +347,7 @@ func TestSoak(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
+	lastMined := keepChainFresh(t, n)
 	if err := waitReady(ctx, n); err != nil {
 		t.Fatal(err)
 	}
@@ -398,6 +445,11 @@ func TestSoak(t *testing.T) {
 	var bugs atomic.Int64
 	note := func(op string, response *nwctest.Response, err error) {
 		key, ok := outcome(op, response, err)
+		if err == nil && response.Error != nil && strings.Contains(response.Error.Message, "catching up") {
+			// The chain is kept fresh, so this is only normal just after a block.
+			key += " catching up"
+			ok = time.Since(lastMined()) < syncGrace
+		}
 		counts.add(key)
 		if !ok {
 			bugs.Add(1)
@@ -631,6 +683,7 @@ func TestCrashLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepChainFresh(t, n)
 	if err := waitReady(t.Context(), n); err != nil {
 		t.Fatal(err)
 	}
@@ -652,12 +705,8 @@ func TestCrashLoop(t *testing.T) {
 	deadline := time.Now().Add(runFor)
 	for round := 0; round < kills || time.Now().Before(deadline); round++ {
 		request, hash, preimage := holdInvoice(t, n)
-		go func() { // The reply is lost when the process dies.
-			ctx, cancel := context.WithTimeout(t.Context(), 65*time.Second)
-			defer cancel()
-			_, _ = client.CallWith(ctx, nwctest.NIP44, "pay_invoice", map[string]string{"invoice": request})
-		}()
-		waitHeld(t, n, hash)
+		// The reply is lost when the process dies.
+		payHeld(t, t.Context(), n, client, request, hash)
 		for range random.IntN(3) { // A few quick payments that may be cut off.
 			invoice, _, err := n.Invoice(t.Context(), other, int64(1+random.IntN(50))*1000)
 			if err != nil {
@@ -695,6 +744,38 @@ func TestCrashLoop(t *testing.T) {
 	}
 }
 
+// payHeld pays a hold invoice over NWC until lnd-b holds the payment. Just after the
+// relay restarts, nwc4ln may not be listening yet, and the relay refuses a request
+// nobody listens for. Sending it again is safe: nwc4ln refuses an invoice the node is
+// already paying.
+func payHeld(t *testing.T, ctx context.Context, n *integration.Network, client *nwctest.Client, request, hash string) {
+	t.Helper()
+	for deadline := time.Now().Add(60 * time.Second); time.Now().Before(deadline); {
+		failed := make(chan error, 1)
+		go func() {
+			callCtx, cancelCall := context.WithTimeout(ctx, 65*time.Second)
+			defer cancelCall()
+			if _, err := client.CallWith(callCtx, nwctest.NIP44, "pay_invoice", map[string]string{"invoice": request}); err != nil {
+				failed <- err
+			}
+		}()
+		for wait := time.Now().Add(10 * time.Second); time.Now().Before(wait); time.Sleep(100 * time.Millisecond) {
+			if isHeld(t, n, hash) {
+				return
+			}
+			select {
+			case err := <-failed:
+				t.Logf("pay the hold invoice again: %v", err)
+				_ = client.Connect(ctx)
+				time.Sleep(time.Second)
+				wait = time.Now() // Send again at once.
+			default:
+			}
+		}
+	}
+	t.Fatal("the payment never reached lnd-b")
+}
+
 // Catches: a service that goes deaf, a payment marked failed that later went out, a
 // hold that never clears, or a payment in flight across the node's restart that the
 // ledger does not follow up, after the node and then the relay go away under load.
@@ -705,6 +786,7 @@ func TestOutages(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
+	keepChainFresh(t, n)
 	if err := waitReady(ctx, n); err != nil {
 		t.Fatal(err)
 	}
@@ -760,12 +842,7 @@ func TestOutages(t *testing.T) {
 			if down == self {
 				var request, hash string
 				request, hash, preimage = holdInvoice(t, n)
-				go func() {
-					callCtx, cancelCall := context.WithTimeout(ctx, 65*time.Second)
-					defer cancelCall()
-					_, _ = client.CallWith(callCtx, nwctest.NIP44, "pay_invoice", map[string]string{"invoice": request})
-				}()
-				waitHeld(t, n, hash)
+				payHeld(t, ctx, n, client, request, hash)
 			}
 			if err := n.StopNode(down); err != nil {
 				t.Fatal(err)

@@ -43,4 +43,5 @@ NWC4LN_IT_DIR=$HOME/nwc4ln-it NWC4LN_LONG_LOGS=$HOME/nwc4ln-long \
 
 For runs of hours, set `NWC4LN_IT_DIR` to a folder on disk. A failed soak prints its seed: `NWC4LN_LONG_SEED` replays
 it. After a long soak a node's restart takes longer: raise `NWC4LN_IT_WAIT` (default 2m) if the outage test times out
-waiting for it. The weekly `longtests` workflow runs an hour on each node, and can be started by hand with another length.
+waiting for it. The tests mine a block every `NWC4LN_BLOCK_EVERY` (default 30m): LND says it is not synced once the
+newest block is 2 hours old, and nwc4ln then refuses payments out. The weekly `longtests` workflow runs an hour on each node, and can be started by hand with another length.
