@@ -736,11 +736,13 @@ func (c *Client) parts(ctx context.Context, hash string) ([]part, error) {
 	return *reply.Payments, nil
 }
 
-// TrackPayment implements node.Node from the payment's parts. Any part that
-// succeeded means the invoice is paid. Any part in flight keeps the payment in
-// flight. When every part failed, xpay may still start another attempt, so the
-// payment counts as failed only once the last part began longer ago than xpay
-// can keep trying. No parts at all is the node's own answer: no record.
+// TrackPayment implements node.Node from the payment's parts, with LND's rule. Any
+// part in flight keeps the payment in flight, even beside a part that succeeded:
+// the payee may still take it, so the amount sent is known only once none is
+// pending. Then any part that succeeded means the invoice is paid, and the amount is
+// every part that succeeded. When every part failed, xpay may still start another
+// attempt, so the payment counts as failed only once the last part began longer ago
+// than xpay can keep trying. No parts at all is the node's own answer: no record.
 func (c *Client) TrackPayment(ctx context.Context, hash string) (node.Payment, error) {
 	if err := checkHash(hash); err != nil {
 		return node.Payment{}, err
@@ -756,31 +758,31 @@ func track(hash string, parts []part, now time.Time) node.Payment {
 	if len(parts) == 0 {
 		return node.Payment{State: node.PaymentNoRecord, Hash: hash}
 	}
-	for _, p := range parts {
-		if p.Status != sendPayComplete {
-			continue
-		}
-		payment := node.Payment{State: node.PaymentSucceeded, Hash: hash, Preimage: p.Preimage}
-		for _, q := range parts {
-			if q.GroupID == p.GroupID && q.Status == sendPayComplete {
-				payment.AmountMsat += q.AmountMsat
-				payment.FeeMsat += q.SentMsat - q.AmountMsat
-			}
-		}
-		return payment
-	}
+	paid := node.Payment{State: node.PaymentSucceeded, Hash: hash}
+	succeeded := false
 	var last int64
 	for _, p := range parts {
-		if p.Status != sendPayFailed {
+		switch p.Status {
+		case sendPayComplete:
+			succeeded = true
+			paid.Preimage = p.Preimage
+			paid.AmountMsat += p.AmountMsat
+			paid.FeeMsat += p.SentMsat - p.AmountMsat
+		case sendPayFailed:
+			last = max(last, p.CreatedAt)
+		default:
 			// Pending, or a status a later version adds: the hold stays.
 			return node.Payment{State: node.PaymentInFlight, Hash: hash}
 		}
-		last = max(last, p.CreatedAt)
 	}
-	if now.Before(time.Unix(last, 0).Add(quietAfterRetry)) {
+	switch {
+	case succeeded:
+		return paid
+	case now.Before(time.Unix(last, 0).Add(quietAfterRetry)):
 		return node.Payment{State: node.PaymentInFlight, Hash: hash}
+	default:
+		return node.Payment{State: node.PaymentFailed, Hash: hash, FailureReason: "every attempt failed"}
 	}
-	return node.Payment{State: node.PaymentFailed, Hash: hash, FailureReason: "every attempt failed"}
 }
 
 // SubscribeInvoices implements node.Node with waitanyinvoice, which waits for

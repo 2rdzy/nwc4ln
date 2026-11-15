@@ -49,21 +49,27 @@ func holdInvoice(t *testing.T, n *integration.Network) (request, hash, preimage 
 func waitHeld(t *testing.T, n *integration.Network, hash string) {
 	t.Helper()
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
-		out, err := n.LNCLI(t.Context(), other, "lookupinvoice", hash)
-		if err != nil {
-			t.Fatalf("lookupinvoice: %v: %s", err, out)
-		}
-		var invoice struct {
-			State string `json:"state"`
-		}
-		if err := json.Unmarshal(out, &invoice); err != nil {
-			t.Fatal(err)
-		}
-		if invoice.State == "ACCEPTED" {
+		if isHeld(t, n, hash) {
 			return
 		}
 	}
 	t.Fatal("the payment never reached lnd-b")
+}
+
+// isHeld reports whether lnd-b holds a payment to its hold invoice.
+func isHeld(t *testing.T, n *integration.Network, hash string) bool {
+	t.Helper()
+	out, err := n.LNCLI(t.Context(), other, "lookupinvoice", hash)
+	if err != nil {
+		t.Fatalf("lookupinvoice: %v: %s", err, out)
+	}
+	var invoice struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(out, &invoice); err != nil {
+		t.Fatal(err)
+	}
+	return invoice.State == "ACCEPTED"
 }
 
 func settleHeld(t *testing.T, n *integration.Network, preimage string) {

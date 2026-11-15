@@ -224,9 +224,26 @@ func TestTrackFromParts(t *testing.T) {
 			{Status: "complete", GroupID: 2, AmountMsat: 3000, SentMsat: 3004, Preimage: "cd"},
 			{Status: "complete", GroupID: 2, AmountMsat: 2000, SentMsat: 2001, Preimage: "cd"},
 		}, node.Payment{State: node.PaymentSucceeded, Preimage: "cd", AmountMsat: 5000, FeeMsat: 5}},
+		// CI longtests 43624254239: parts of 198 and 1802 sat, read with one complete.
 		{"SucceededWithPartPending", []part{
-			{Status: "pending", GroupID: 1}, {Status: "complete", GroupID: 1, AmountMsat: 1000, SentMsat: 1000, Preimage: "cd"},
-		}, node.Payment{State: node.PaymentSucceeded, Preimage: "cd", AmountMsat: 1000}},
+			{Status: "complete", GroupID: 1, AmountMsat: 198_000, SentMsat: 198_000, Preimage: "cd"},
+			{Status: "pending", GroupID: 1, AmountMsat: 1_802_000, SentMsat: 1_802_000},
+		}, node.Payment{State: node.PaymentInFlight}},
+		{"SucceededWithPartFailedInSameGroup", []part{
+			{Status: "failed", GroupID: 1, AmountMsat: 1_802_000, SentMsat: 1_802_100},
+			{Status: "complete", GroupID: 1, AmountMsat: 198_000, SentMsat: 198_010, Preimage: "cd"},
+			{Status: "complete", GroupID: 1, AmountMsat: 1_802_000, SentMsat: 1_802_020, Preimage: "cd"},
+		}, node.Payment{State: node.PaymentSucceeded, Preimage: "cd", AmountMsat: 2_000_000, FeeMsat: 30}},
+		// The payee may still take the pending part, so the amount is not known yet.
+		{"SucceededWithOtherGroupPending", []part{
+			{Status: "pending", GroupID: 1, AmountMsat: 2_000_000, SentMsat: 2_000_000},
+			{Status: "complete", GroupID: 2, AmountMsat: 2_000_000, SentMsat: 2_000_005, Preimage: "cd"},
+		}, node.Payment{State: node.PaymentInFlight}},
+		// Money that left in two attempts is all charged: the node is the source of truth.
+		{"SucceededInTwoGroups", []part{
+			{Status: "complete", GroupID: 1, AmountMsat: 2_000_000, SentMsat: 2_000_003, Preimage: "cd"},
+			{Status: "complete", GroupID: 2, AmountMsat: 2_000_000, SentMsat: 2_000_005, Preimage: "cd"},
+		}, node.Payment{State: node.PaymentSucceeded, Preimage: "cd", AmountMsat: 4_000_000, FeeMsat: 8}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
