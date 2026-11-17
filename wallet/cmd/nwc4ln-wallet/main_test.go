@@ -20,16 +20,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/config"
-	"github.com/2rdzy/nwc4ln/internal/nwc"
-	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
-	"github.com/2rdzy/nwc4ln/internal/store"
+	"github.com/2rdzy/nwc4ln/wallet/internal/config"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc/nwctest"
+	"github.com/2rdzy/nwc4ln/wallet/internal/store"
 )
 
 // A failure here means a repeated init wipes the ledger or the settings.
 func TestInitRefusesExistingData(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "new", "nwc4ln.toml")
+	path := filepath.Join(t.TempDir(), "new", "nwc4ln-wallet.toml")
 	if err := run(ctx, []string{"init", "--config", path}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestInitRefusesExistingData(t *testing.T) {
 
 // A failure here means keys or settings are readable by other users.
 func TestInitFileModes(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "new", "nwc4ln.toml")
+	path := filepath.Join(t.TempDir(), "new", "nwc4ln-wallet.toml")
 	if err := run(context.Background(), []string{"init", "--config", path}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestInitFileModes(t *testing.T) {
 
 // A failure here means the operator gets a confusing failure instead of the cause.
 func TestStartRefusesWithoutInit(t *testing.T) {
-	path := filepath.Join(dataDir(t), "nwc4ln.toml")
+	path := filepath.Join(dataDir(t), "nwc4ln-wallet.toml")
 	err := run(context.Background(), []string{"start", "--config", path}, &bytes.Buffer{})
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("got %v", err)
@@ -96,7 +96,7 @@ func TestStartRefusesWithoutInit(t *testing.T) {
 // Catches: a second service on the same data folder.
 func TestStartRefusesWhileRunning(t *testing.T) {
 	dir := dataDir(t)
-	path := filepath.Join(dir, "nwc4ln.toml")
+	path := filepath.Join(dir, "nwc4ln-wallet.toml")
 	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -128,11 +128,11 @@ func TestUnknownCommandShowsUsage(t *testing.T) {
 // open: a clean close removes the WAL file.
 func TestStartExitsCleanlyOnSignal(t *testing.T) {
 	dir := dataDir(t)
-	binary := filepath.Join(dir, "nwc4ln")
+	binary := filepath.Join(dir, "nwc4ln-wallet")
 	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v: %s", err, out)
 	}
-	path := filepath.Join(dir, "data", "nwc4ln.toml")
+	path := filepath.Join(dir, "data", "nwc4ln-wallet.toml")
 	if out, err := exec.Command(binary, "init", "--config", path).CombinedOutput(); err != nil {
 		t.Fatalf("init: %v: %s", err, out)
 	}
@@ -215,7 +215,7 @@ func testCertificate(t *testing.T) []byte {
 // Catches: the service running with no way to hear a client.
 func TestStartRefusesBadRelay(t *testing.T) {
 	for _, relay := range []string{"", "https://relay.example", "127.0.0.1:7777"} {
-		path := filepath.Join(dataDir(t), "nwc4ln.toml")
+		path := filepath.Join(dataDir(t), "nwc4ln-wallet.toml")
 		if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
 			t.Fatal(err)
 		}
@@ -232,7 +232,7 @@ func TestStartRefusesBadRelay(t *testing.T) {
 // Catches: start using the LND client, or no client, when the config names Core
 // Lightning. The rune file may not be readable by others, and start must say so.
 func TestStartUsesTheConfiguredNode(t *testing.T) {
-	path := filepath.Join(dataDir(t), "nwc4ln.toml")
+	path := filepath.Join(dataDir(t), "nwc4ln-wallet.toml")
 	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestStartUsesTheConfiguredNode(t *testing.T) {
 // Catches: a backup that refuses, or waits, while the service holds the data folder.
 func TestBackupWhileRunning(t *testing.T) {
 	dir := dataDir(t)
-	path := filepath.Join(dir, "nwc4ln.toml")
+	path := filepath.Join(dir, "nwc4ln-wallet.toml")
 	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestAdminKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := dataDir(t)
-	path := filepath.Join(dir, "nwc4ln.toml")
+	path := filepath.Join(dir, "nwc4ln-wallet.toml")
 	if err := run(t.Context(), []string{"init", "--admin", "npub1nonsense", "--config", path}, io.Discard); err == nil {
 		t.Fatal("init took a bad npub")
 	}
@@ -372,7 +372,7 @@ func TestFileModes(t *testing.T) {
 	}{
 		{"DatabaseReadable", func(dir string) string { return filepath.Join(dir, databaseName) }, 0o644},
 		{"WALReadable", func(dir string) string { return filepath.Join(dir, databaseName+"-wal") }, 0o640},
-		{"ConfigWritable", func(dir string) string { return filepath.Join(dir, "nwc4ln.toml") }, 0o622},
+		{"ConfigWritable", func(dir string) string { return filepath.Join(dir, "nwc4ln-wallet.toml") }, 0o622},
 		{"FolderWritable", func(dir string) string { return dir }, 0o770},
 	}
 	testNpub, err := nwc.EncodeNpub(strings.Repeat("ab", 32))
@@ -382,7 +382,7 @@ func TestFileModes(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			dir := dataDir(t)
-			path := filepath.Join(dir, "nwc4ln.toml")
+			path := filepath.Join(dir, "nwc4ln-wallet.toml")
 			if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
 				t.Fatal(err)
 			}
@@ -417,7 +417,7 @@ func TestFileModes(t *testing.T) {
 // must fail on the node and say so.
 func TestCheckRunsBesideTheService(t *testing.T) {
 	dir := dataDir(t)
-	path := filepath.Join(dir, "nwc4ln.toml")
+	path := filepath.Join(dir, "nwc4ln-wallet.toml")
 	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
 		t.Fatal(err)
 	}

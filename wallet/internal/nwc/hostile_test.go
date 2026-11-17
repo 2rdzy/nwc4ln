@@ -8,8 +8,8 @@ import (
 
 	"github.com/getAlby/go-nostr"
 
-	"github.com/2rdzy/nwc4ln/internal/ledger"
-	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc/nwctest"
 )
 
 // Catches: a revoked key that can grow the requests table, or make the service work,

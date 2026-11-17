@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
 )
 
 // ErrUnreachable is what every call returns while the node is unreachable.

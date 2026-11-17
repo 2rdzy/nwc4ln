@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/2rdzy/nwc4ln/internal/config"
-	"github.com/2rdzy/nwc4ln/internal/node"
-	"github.com/2rdzy/nwc4ln/internal/node/cln"
-	"github.com/2rdzy/nwc4ln/internal/node/lnd"
-	"github.com/2rdzy/nwc4ln/test/integration"
+	"github.com/2rdzy/nwc4ln/wallet/internal/config"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/cln"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/lnd"
+	"github.com/2rdzy/nwc4ln/wallet/test/integration"
 )
 
 // The helpers here are the only part of the NWC tests that know the node type.

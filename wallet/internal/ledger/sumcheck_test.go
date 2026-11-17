@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/node/fake"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/fake"
 )
 
 // book is the test's own record of where the money is. It is kept by hand from what

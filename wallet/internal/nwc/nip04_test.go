@@ -9,7 +9,7 @@ import (
 
 	"github.com/getAlby/go-nostr"
 
-	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc/nwctest"
 )
 
 // Catches: one malformed NIP-04 event stopping the service. handle runs on the

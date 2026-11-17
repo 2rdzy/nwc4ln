@@ -9,8 +9,8 @@ import (
 
 	"github.com/getAlby/go-nostr"
 
-	"github.com/2rdzy/nwc4ln/internal/ledger"
-	"github.com/2rdzy/nwc4ln/internal/store"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/store"
 )
 
 // CheckRelay reports a relay URL the service could not connect to. The config

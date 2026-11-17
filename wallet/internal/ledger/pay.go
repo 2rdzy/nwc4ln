@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
 )
 
 // PayRequest asks for a payment from an account.

@@ -5,6 +5,8 @@ Lightning node from the privkeyio fork, and a local Nostr relay (`nak serve`). `
 from each side, and so do `cln-a` and `lnd-b`. `lnd-c` sits behind `lnd-b`, so a payment from `lnd-a` or `cln-a` to
 `lnd-c` pays a real routing fee.
 
+Run these commands from the `wallet/` folder.
+
 ```sh
 go run ./test/integration/cmd/regtest up      # start; the first run fetches and builds, a few minutes
 go test -tags integration -p 1 -count=1 ./test/integration/...

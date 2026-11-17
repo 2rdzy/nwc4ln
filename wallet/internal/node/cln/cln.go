@@ -32,7 +32,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
 )
 
 // Methods lists every method the client calls, and nothing else. The operator

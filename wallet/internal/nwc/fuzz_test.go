@@ -8,7 +8,7 @@ import (
 	"github.com/getAlby/go-nostr/nip04"
 	"github.com/getAlby/go-nostr/nip44"
 
-	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc/nwctest"
 )
 
 // Catches: a request from a connection holder that crashes the service, gets no

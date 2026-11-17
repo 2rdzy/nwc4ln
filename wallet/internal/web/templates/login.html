@@ -4,7 +4,7 @@
 <section class="card">
 <h1>Log in</h1>
 {{if .NoAdmin}}
-<p class="warn">No admin key is set. Stop the service, run <code>nwc4ln set-admin &lt;npub&gt;</code>, and start it again.</p>
+<p class="warn">No admin key is set. Stop the service, run <code>nwc4ln-wallet set-admin &lt;npub&gt;</code>, and start it again.</p>
 {{else}}
 <p class="muted">Sign the login request with your Nostr browser extension (NIP-07). Only the admin key can log in.</p>
 <button id="login" type="button" data-challenge="{{.Challenge}}">Log in with extension</button>

@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/2rdzy/nwc4ln/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
 )
 
 // transactionsPerPage is how many rows one page of the Transactions page shows.

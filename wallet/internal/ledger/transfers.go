@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/2rdzy/nwc4ln/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
 )
 
 // transferExpirySeconds is the life of a fund or withdraw invoice. Nobody is meant to

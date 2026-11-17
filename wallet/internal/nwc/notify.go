@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/2rdzy/nwc4ln/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
 )
 
 // notification is the payload of a kind 23197 or 23196 event.
