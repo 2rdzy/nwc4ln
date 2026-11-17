@@ -3,6 +3,7 @@ package ledger
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -32,6 +33,32 @@ type env struct {
 	ledger *Ledger
 	now    *atomic.Int64 // Unix seconds, read by the ledger's clock.
 	acct   int64
+	connMu *sync.Mutex     // A pointer: some tests copy env.
+	conns  map[int64]int64 // Full connection of each account, made on first use.
+}
+
+// connection gives the account a full connection on first use, and returns it. A
+// payment must name the connection that asked for it.
+func (e *env) connection(account int64) int64 {
+	e.t.Helper()
+	e.connMu.Lock()
+	defer e.connMu.Unlock()
+	if id, ok := e.conns[account]; ok {
+		return id
+	}
+	result, err := e.store.DB.Exec(`INSERT INTO connections (account_id, client_pubkey, service_key, role, created_at)
+		VALUES (?, ?, 'key', 'full', 0)`, account, fmt.Sprintf("client-%d", account))
+	if err != nil {
+		e.t.Error(err) // May run on another goroutine, where Fatal must not be called.
+		return 0
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		e.t.Error(err)
+		return 0
+	}
+	e.conns[account] = id
+	return id
 }
 
 func newEnv(t *testing.T) *env {
@@ -43,7 +70,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	e := &env{t: t, store: db, path: path, node: fake.New(), now: &atomic.Int64{}}
+	e := &env{t: t, store: db, path: path, node: fake.New(), now: &atomic.Int64{}, conns: map[int64]int64{}, connMu: &sync.Mutex{}}
 	e.node.SetSpendable(node.Spendable{ActiveMsat: testFunds, AllMsat: testFunds})
 	e.now.Store(time.Now().Unix())
 	result, err := db.DB.ExecContext(ctx, `INSERT INTO accounts (type, name, can_pay, can_invoice, created_at)
@@ -105,7 +132,7 @@ func (e *env) sweep() {
 
 func (e *env) pay(invoice string) Transaction {
 	e.t.Helper()
-	tx, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: invoice})
+	tx, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: invoice})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -261,14 +288,14 @@ func TestOneAttemptPerInvoice(t *testing.T) {
 	pending := e.node.OutsideInvoice(5 * sat)
 	e.node.ScriptPay(fake.PayTimeout)
 	e.pay(pending)
-	_, err := e.ledger.Pay(ctx, PayRequest{AccountID: e.acct, Invoice: pending})
+	_, err := e.ledger.Pay(ctx, PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: pending})
 	if !errors.Is(err, ErrAlreadyPaid) {
 		t.Fatalf("while pending: %v", err)
 	}
 
 	settled := e.node.OutsideInvoice(5 * sat)
 	e.pay(settled)
-	_, err = e.ledger.Pay(ctx, PayRequest{AccountID: e.acct, Invoice: settled})
+	_, err = e.ledger.Pay(ctx, PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: settled})
 	if !errors.Is(err, ErrAlreadyPaid) {
 		t.Fatalf("after settling: %v", err)
 	}
@@ -292,7 +319,7 @@ func TestConcurrentPaymentsOfOneInvoice(t *testing.T) {
 	var accepted atomic.Int32
 	for range 10 {
 		wg.Go(func() {
-			if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: invoice}); err == nil {
+			if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: invoice}); err == nil {
 				accepted.Add(1)
 			} else if !errors.Is(err, ErrAlreadyPaid) {
 				t.Error(err)
@@ -371,7 +398,7 @@ func TestCallerStopsWaitingDuringLiveCall(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan Transaction)
 	go func() {
-		tx, err := e.ledger.Pay(ctx, PayRequest{AccountID: e.acct, Invoice: invoice})
+		tx, err := e.ledger.Pay(ctx, PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: invoice})
 		if err != nil {
 			t.Error(err)
 		}
@@ -672,10 +699,10 @@ func TestRefusedRequestsWriteNothing(t *testing.T) {
 		request PayRequest
 		want    error
 	}{
-		{"amountless with no amount", PayRequest{AccountID: e.acct, Invoice: amountless}, ErrBadAmount},
-		{"negative amount", PayRequest{AccountID: e.acct, Invoice: amountless, AmountMsat: -1}, ErrBadAmount},
-		{"above the cap", PayRequest{AccountID: e.acct, Invoice: tooBig}, ErrBadAmount},
-		{"differs from the invoice", PayRequest{AccountID: e.acct, Invoice: normal, AmountMsat: 6 * sat}, ErrBadAmount},
+		{"amountless with no amount", PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: amountless}, ErrBadAmount},
+		{"negative amount", PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: amountless, AmountMsat: -1}, ErrBadAmount},
+		{"above the cap", PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: tooBig}, ErrBadAmount},
+		{"differs from the invoice", PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: normal, AmountMsat: 6 * sat}, ErrBadAmount},
 		{"unknown account", PayRequest{AccountID: 99, Invoice: normal}, ErrUnknownAccount},
 	}
 	for _, c := range cases {
@@ -692,14 +719,14 @@ func TestRefusedRequestsWriteNothing(t *testing.T) {
 	if _, err := e.store.DB.Exec("UPDATE accounts SET deleted_at = 1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.ledger.Pay(ctx, PayRequest{AccountID: e.acct, Invoice: normal}); !errors.Is(err, ErrAccountDeleted) {
+	if _, err := e.ledger.Pay(ctx, PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: normal}); !errors.Is(err, ErrAccountDeleted) {
 		t.Errorf("deleted account: %v", err)
 	}
 	if _, err := e.store.DB.Exec("UPDATE accounts SET deleted_at = NULL"); err != nil {
 		t.Fatal(err)
 	}
 	e.advance(2 * time.Hour)
-	if _, err := e.ledger.Pay(ctx, PayRequest{AccountID: e.acct, Invoice: normal}); !errors.Is(err, ErrInvoiceExpired) {
+	if _, err := e.ledger.Pay(ctx, PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: normal}); !errors.Is(err, ErrInvoiceExpired) {
 		t.Errorf("expired: %v", err)
 	}
 	if e.rowCount() != 0 {
@@ -717,13 +744,13 @@ func TestOwnClosedInvoiceAndAmountless(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.waitState(in.ID, StateSettled)
-	_, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: in.Invoice})
+	_, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: in.Invoice})
 	if !errors.Is(err, ErrInvoiceClosed) {
 		t.Fatalf("own settled invoice: %v", err)
 	}
 
 	amountless := e.node.OutsideInvoice(0)
-	tx, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: amountless, AmountMsat: 3 * sat})
+	tx, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: amountless, AmountMsat: 3 * sat})
 	if err != nil || tx.State != StateSettled || tx.AmountMsat != 3*sat {
 		t.Fatalf("amountless: %+v, %v", tx, err)
 	}
@@ -735,7 +762,7 @@ func TestOwnClosedInvoiceAndAmountless(t *testing.T) {
 // Catches: requests answered before recovery has run.
 func TestPayBeforeStartIsRefused(t *testing.T) {
 	e := newEnv(t)
-	_, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: e.node.OutsideInvoice(5 * sat)})
+	_, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: e.node.OutsideInvoice(5 * sat)})
 	if !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("%v", err)
 	}
@@ -775,7 +802,7 @@ func TestReadFailureAfterHoldIsPending(t *testing.T) {
 	e := newEnv(t)
 	e.ledger = e.fresh(&closedAfterPay{Node: e.node, after: func() { _ = e.store.DB.Close() }})
 	e.start()
-	tx, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: e.node.OutsideInvoice(5 * sat)})
+	tx, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: e.node.OutsideInvoice(5 * sat)})
 	if err != nil {
 		t.Fatalf("error after the hold: %v", err)
 	}
@@ -844,7 +871,7 @@ func TestChargesWhatTheNodeSent(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	tx, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: invoice, AmountMsat: 900 * sat})
+	tx, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: invoice, AmountMsat: 900 * sat})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -861,7 +888,7 @@ func TestOwnInvoiceNotInLedgerIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: own.PaymentRequest})
+	_, err = e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: own.PaymentRequest})
 	if !errors.Is(err, ErrOwnInvoice) {
 		t.Fatalf("%v", err)
 	}
@@ -1109,4 +1136,18 @@ func TestHistoryWindow(t *testing.T) {
 	if total != 2 || len(rows) != 2 || rows[0].PaymentHash != hashes[2] || rows[1].PaymentHash != hashes[1] {
 		t.Fatalf("total %d, rows %+v", total, rows)
 	}
+}
+
+// finished ends a payment left in flight as a success at the node, and returns the
+// node's record of it.
+func (e *env) finished(hash string) node.Payment {
+	e.t.Helper()
+	if err := e.node.Finish(hash, true); err != nil {
+		e.t.Fatal(err)
+	}
+	payment, err := e.node.TrackPayment(context.Background(), hash)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return payment
 }

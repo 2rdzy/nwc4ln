@@ -90,7 +90,7 @@ func TestInFlightRaisesNoShortfall(t *testing.T) {
 	if err := waitReady(ctx, n); err != nil {
 		t.Fatal(err)
 	}
-	money, service := inProcess(t, ctx, n)
+	money, service, db := inProcessStore(t, ctx, n)
 	if _, err := service.AddSubWallet(ctx, "holder"); err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +99,10 @@ func TestInFlightRaisesNoShortfall(t *testing.T) {
 		t.Fatalf("sub-wallets %+v, %v", wallets, err)
 	}
 	wallet := wallets[0].ID
+	var connection int64
+	if err := db.DB.QueryRowContext(ctx, `SELECT id FROM connections WHERE account_id = ?`, wallet).Scan(&connection); err != nil {
+		t.Fatal(err)
+	}
 	available := steadyAvailable(t, money)
 	if row, err := money.Fund(ctx, wallet, available); err != nil || row.State != ledger.StateSettled {
 		t.Fatalf("fund %+v, %v", row, err)
@@ -122,7 +126,7 @@ func TestInFlightRaisesNoShortfall(t *testing.T) {
 	}
 	paid := make(chan ledger.Transaction, 1)
 	go func() {
-		row, err := money.Pay(ctx, ledger.PayRequest{AccountID: wallet, Invoice: invoice.Request})
+		row, err := money.Pay(ctx, ledger.PayRequest{AccountID: wallet, ConnectionID: connection, Invoice: invoice.Request})
 		if err != nil {
 			t.Error(err)
 		}

@@ -165,6 +165,7 @@ func (s *Service) payInvoice(ctx context.Context, a *accepted, raw json.RawMessa
 	defer cancel()
 	row, err := s.ledger.Pay(ctx, ledger.PayRequest{
 		AccountID: a.connection.accountID, Invoice: params.Invoice, AmountMsat: params.Amount, RequestID: a.rowID,
+		ConnectionID: a.connection.id,
 	})
 	if err != nil {
 		return nil, s.refused("pay_invoice", err)
@@ -189,6 +190,8 @@ func (s *Service) refused(command string, err error) *Error {
 		return &Error{Code: codeUnauthorized, Message: "this account is deleted"}
 	case errors.Is(err, ledger.ErrAccountExpired):
 		return &Error{Code: codeUnauthorized, Message: "this app has expired"}
+	case errors.Is(err, ledger.ErrConnectionRevoked):
+		return &Error{Code: codeUnauthorized, Message: "this connection is revoked"}
 	case errors.Is(err, ledger.ErrRestricted):
 		return &Error{Code: codeRestricted, Message: "this app may not do that"}
 	case errors.Is(err, ledger.ErrQuotaExceeded):

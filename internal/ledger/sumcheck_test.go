@@ -167,7 +167,7 @@ func (b *book) payOutside() {
 	e.node.SetRouteFee(fee)
 	invoice := e.node.OutsideInvoice(amount)
 	if amount+reserve > b.funds(payer) {
-		row, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: payer, Invoice: invoice})
+		row, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: payer, ConnectionID: e.connection(payer), Invoice: invoice})
 		if !errors.Is(err, ErrInsufficientBalance) {
 			e.t.Fatalf("over the funds: %+v, %v", row, err)
 		}
@@ -175,7 +175,7 @@ func (b *book) payOutside() {
 	}
 	step := []fake.PayStep{fake.PaySucceed, fake.PaySucceed, fake.PayFail, fake.PayTimeout}[b.rng.IntN(4)]
 	e.node.ScriptPay(step)
-	row, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: payer, Invoice: invoice})
+	row, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: payer, ConnectionID: e.connection(payer), Invoice: invoice})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func (b *book) payInternal() {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	paid, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: payer, Invoice: row.Invoice})
+	paid, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: payer, ConnectionID: e.connection(payer), Invoice: row.Invoice})
 	if amount > b.funds(payer) {
 		if !errors.Is(err, ErrInsufficientBalance) {
 			e.t.Fatalf("over the funds: %+v, %v", paid, err)

@@ -42,7 +42,7 @@ func (e *env) shortfall() int64 {
 }
 
 func (e *env) payFrom(account int64, amountMsat int64) (Transaction, error) {
-	return e.ledger.Pay(context.Background(), PayRequest{AccountID: account, Invoice: e.node.OutsideInvoice(amountMsat)})
+	return e.ledger.Pay(context.Background(), PayRequest{AccountID: account, ConnectionID: e.connection(account), Invoice: e.node.OutsideInvoice(amountMsat)})
 }
 
 const lowFundsLog = "app refused: main wallet too low"
@@ -75,8 +75,9 @@ func TestShortfall(t *testing.T) {
 	if got := logs.count(lowFundsLog); got != 1 {
 		t.Fatalf("%d log lines for the refusal", got)
 	}
+	limited := e.addLimitedApp(0)
 	if _, err := e.ledger.Pay(context.Background(), PayRequest{
-		AccountID: e.addLimitedApp(0), Invoice: e.node.OutsideInvoice(sat),
+		AccountID: limited, ConnectionID: e.connection(limited), Invoice: e.node.OutsideInvoice(sat),
 	}); !errors.Is(err, ErrQuotaExceeded) || logs.count(lowFundsLog) != 1 {
 		t.Fatalf("a limit refusal: %v, logged as low funds: %t", err, logs.count(lowFundsLog) != 1)
 	}

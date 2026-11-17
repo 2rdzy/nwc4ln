@@ -150,7 +150,7 @@ func TestInvoicePaidOutsideIsRefused(t *testing.T) {
 			Invoice: invoice, FeeLimitMsat: 100 * sat, Timeout: time.Second,
 		})
 		before := e.rowCount()
-		_, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: invoice})
+		_, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: invoice})
 		if !errors.Is(err, ErrAlreadyPaid) {
 			t.Fatalf("step %d: got %v, want ErrAlreadyPaid", step, err)
 		}
@@ -174,7 +174,7 @@ func TestLateSuccessBlocksANewPayment(t *testing.T) {
 	if err := e.node.Finish(row.PaymentHash, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: invoice}); !errors.Is(err, ErrAlreadyPaid) {
+	if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: invoice}); !errors.Is(err, ErrAlreadyPaid) {
 		t.Fatalf("got %v, want ErrAlreadyPaid", err)
 	}
 }

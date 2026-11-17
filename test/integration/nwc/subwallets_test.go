@@ -73,6 +73,13 @@ func nodeFee(t *testing.T, n *integration.Network, hash string) int64 {
 // command. Cancel ctx before the test ends: the cleanups wait for the service.
 func inProcess(t *testing.T, ctx context.Context, n *integration.Network) (*ledger.Ledger, *nwc.Service) {
 	t.Helper()
+	money, service, _ := inProcessStore(t, ctx, n)
+	return money, service
+}
+
+// inProcessStore is inProcess that also gives the database.
+func inProcessStore(t *testing.T, ctx context.Context, n *integration.Network) (*ledger.Ledger, *nwc.Service, *store.Store) {
+	t.Helper()
 	dir := t.TempDir()
 	lightning := nodeClient(t, n, dir)
 	db, err := store.Create(ctx, filepath.Join(dir, "test.db"))
@@ -93,7 +100,7 @@ func inProcess(t *testing.T, ctx context.Context, n *integration.Network) (*ledg
 	var running sync.WaitGroup
 	running.Go(func() { service.Run(ctx) })
 	t.Cleanup(running.Wait)
-	return money, service
+	return money, service, db
 }
 
 // Catches: the fee the ledger charges differing from what the node really paid, on a

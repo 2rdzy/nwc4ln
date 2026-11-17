@@ -30,7 +30,7 @@ func (e *env) settings(change func(*AppSettings)) {
 }
 
 func (e *env) tryPay(amountMsat int64) (Transaction, error) {
-	return e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: e.node.OutsideInvoice(amountMsat)})
+	return e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: e.node.OutsideInvoice(amountMsat)})
 }
 
 func (e *env) used() int64 {
@@ -56,7 +56,7 @@ func (e *env) payMany(count int, amountMsat int64, refusal error) (held, refused
 	)
 	for _, invoice := range invoices {
 		wg.Go(func() {
-			_, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: invoice})
+			_, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: invoice})
 			mu.Lock()
 			defer mu.Unlock()
 			switch {

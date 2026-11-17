@@ -145,7 +145,7 @@ func TestSubWalletSettlementWaitsForAppCheck(t *testing.T) {
 	e.fund(wallet, 1_000*sat)
 	e.node.ScriptPay(fake.PayTimeout)
 	invoice := e.node.OutsideInvoice(500 * sat)
-	row, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: wallet, Invoice: invoice})
+	row, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: wallet, ConnectionID: e.connection(wallet), Invoice: invoice})
 	if err != nil {
 		t.Fatal(err)
 	}
