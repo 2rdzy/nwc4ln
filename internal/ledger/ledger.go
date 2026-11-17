@@ -15,11 +15,13 @@
 package ledger
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -69,6 +71,17 @@ const (
 	sweepEvery   = 5 * time.Second
 	retryEvery   = 5 * time.Second
 	catchUpEvery = 10 * time.Minute
+
+	// passBudget bounds the invoice lookups and the payment lookups of one sweep, each.
+	// A pass that runs out carries on from that row on the next sweep, so the sync and
+	// shortfall checks, which run first, never wait behind a long list. One node call
+	// that is running when the budget ends can add its own timeout.
+	passBudget = 20 * time.Second
+
+	// syncStaleAfter is how long the node's sync state is believed while reads of it
+	// fail. After that it is unknown, and payments that leave the node are refused
+	// (R18). A slow sweep with reads that work never makes it unknown.
+	syncStaleAfter = 2 * time.Minute
 )
 
 // Errors a caller can act on. Each means no row was written.
@@ -111,6 +124,9 @@ var (
 	// ErrNodeNotSynced means the node is behind the chain, so a payment that leaves the
 	// node is refused: it could get wrong deadlines. Payments between accounts go on.
 	ErrNodeNotSynced = errors.New("the node is catching up with the chain")
+	// ErrSyncUnknown means the node's sync state has not been read for syncStaleAfter,
+	// so a payment that leaves the node is refused, as for ErrNodeNotSynced.
+	ErrSyncUnknown = errors.New("cannot read the node's sync state")
 	// ErrNodeHistory means the node has the right key but no record of a payment or
 	// invoice the ledger saw settle there, as after a restore from seed or a deletion of
 	// its payments. Its "no record" answers mean nothing either.
@@ -139,6 +155,7 @@ type Ledger struct {
 	sweepEvery   time.Duration
 	retryEvery   time.Duration
 	catchUpEvery time.Duration
+	passBudget   time.Duration
 	beforePay    func() // Runs after the hold is stored, before the node call.
 	// maxOpenInvoices and maxDailyInvoices are the constants of the same names.
 	maxOpenInvoices, maxDailyInvoices int
@@ -164,7 +181,16 @@ type Ledger struct {
 	pubKey   string    // The node's key, set by Start.
 	nextPass time.Time // When a sweep next checks pending invoices.
 	// notSynced is the node's last answer: behind the chain. Read on every sweep.
-	notSynced bool
+	// syncReadAt is when that answer came. syncFailing is set while the latest read
+	// failed. syncLost is set once the answer is unknown, so the change is logged once.
+	notSynced   bool
+	syncReadAt  time.Time
+	syncFailing bool
+	syncLost    bool
+	// incomingAfter and outgoingAfter are where an unfinished pass over pending rows
+	// carries on: with the rows above this ID, or 0 when the last pass reached the end.
+	// Kept in memory only, because every start makes a full pass.
+	incomingAfter, outgoingAfter int64
 	// shortfallSince is when the current shortfall began, or zero.
 	shortfallSince time.Time
 	// nextShortfall and nextCheck are when the sweep next watches the shortfall and
@@ -188,6 +214,7 @@ func New(db *store.Store, n node.Node, log *slog.Logger) *Ledger {
 	return &Ledger{
 		db: db.DB, node: n, log: log,
 		now: time.Now, sweepEvery: sweepEvery, retryEvery: retryEvery, catchUpEvery: catchUpEvery,
+		passBudget:      passBudget,
 		maxOpenInvoices: maxOpenInvoices, maxDailyInvoices: maxDailyInvoices,
 		attempts: map[int64]*attempt{},
 	}
@@ -258,10 +285,10 @@ func (l *Ledger) Start(ctx context.Context) error {
 	if err := l.checkHistory(ctx); err != nil {
 		return err
 	}
-	if err := l.catchUp(ctx); err != nil {
+	if err := l.catchUp(ctx, 0); err != nil {
 		return fmt.Errorf("catch up on invoices: %w", err)
 	}
-	if err := l.trackPending(ctx); err != nil {
+	if err := l.trackPending(ctx, 0); err != nil {
 		return fmt.Errorf("check pending payments: %w", err)
 	}
 	l.mu.Lock()
@@ -294,7 +321,7 @@ func (l *Ledger) checkNode(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.pubKey = info.PubKey
-	l.notSynced = !info.Synced
+	l.notSynced, l.syncReadAt = !info.Synced, l.now()
 	return nil
 }
 
@@ -305,18 +332,39 @@ func (l *Ledger) NodeSynced() bool {
 	return !l.notSynced
 }
 
+// NodeSyncUnknown reports that reads of the node's sync state have failed for more
+// than syncStaleAfter. NodeSynced then gives an answer too old to rely on.
+func (l *Ledger) NodeSyncUnknown() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.syncUnknown()
+}
+
+func (l *Ledger) syncUnknown() bool {
+	return l.syncFailing && l.now().Sub(l.syncReadAt) > syncStaleAfter
+}
+
 // readSynced asks the node whether it is synced to the chain.
 func (l *Ledger) readSynced(ctx context.Context) error {
 	info, err := l.node.Info(ctx)
-	if err != nil {
-		return err
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.notSynced != !info.Synced {
+	if err != nil {
+		l.syncFailing = true
+		if l.syncUnknown() && !l.syncLost {
+			l.syncLost = true
+			l.log.Warn("node sync state unknown: payments that leave the node are refused",
+				"last read", l.syncReadAt.UTC().Format(time.DateTime+" UTC"))
+		}
+		return err
+	}
+	if l.syncLost {
+		l.syncLost = false
+		l.log.Info("node sync state read again", "synced", info.Synced)
+	} else if l.notSynced != !info.Synced {
 		l.log.Warn("node sync changed", "synced", info.Synced)
 	}
-	l.notSynced = !info.Synced
+	l.notSynced, l.syncReadAt, l.syncFailing = !info.Synced, l.now(), false
 	return nil
 }
 
@@ -385,29 +433,68 @@ func (l *Ledger) sweepLoop(ctx context.Context) {
 	}
 }
 
-// sweep is one pass over the unfinished work. See catchUp for why invoices are
-// checked while the settle index is 0. After that they are checked now and then,
-// which closes rows the stream never reports: expired, canceled or removed. Each pass
-// also finishes deleted sub-wallets.
+// sweep is one pass over the unfinished work. The sync and shortfall checks come
+// first, so that they run on time however long the lists below are. See catchUp for
+// why invoices are checked while the settle index is 0. After that they are checked
+// now and then, which closes rows the stream never reports: expired, canceled or
+// removed. A pass that ran out of budget carries on at the next sweep. Each sweep also
+// finishes deleted sub-wallets.
 func (l *Ledger) sweep(ctx context.Context) error {
-	index, err := settleIndex(ctx, l.db)
-	if err != nil {
-		return err
-	}
-	var catchUpErr error
-	if index == 0 || l.passDue() {
-		catchUpErr = l.catchUp(ctx)
-	}
-	trackErr := l.trackPending(ctx)
-	// After the payments, so that what they just released moves in this pass.
-	errs := []error{catchUpErr, trackErr, l.finishDeleted(ctx), l.readSynced(ctx)}
+	errs := []error{l.readSynced(ctx)}
 	if l.due(&l.nextShortfall, shortfallCheckEvery) {
 		errs = append(errs, l.watchShortfall(ctx))
 	}
+	index, err := settleIndex(ctx, l.db)
+	if err != nil {
+		return errors.Join(append(errs, err)...)
+	}
+	if index == 0 || l.passUnfinished() || l.passDue() {
+		errs = append(errs, l.catchUp(ctx, l.passBudget))
+	}
+	errs = append(errs, l.trackPending(ctx, l.passBudget))
+	// After the payments, so that what they just released moves in this pass.
+	errs = append(errs, l.finishDeleted(ctx))
 	if l.due(&l.nextCheck, regularCheckEvery) {
 		errs = append(errs, l.regularCheck(ctx))
 	}
 	return errors.Join(errs...)
+}
+
+// passUnfinished reports that the last pass over pending invoices ran out of budget.
+func (l *Ledger) passUnfinished() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.incomingAfter != 0
+}
+
+// budgeted bounds one pass over pending rows, which come ordered by ID. A pass
+// carries on with the rows above *after, where the pass before stopped, and once it
+// reaches the end of the list *after is 0 again, so the next pass starts from the top. With
+// budget 0 there is no limit and the place is left alone. next is called before each
+// row and reports whether the budget allows that row. At least one row is done per
+// pass, so a pass always moves on.
+func (l *Ledger) budgeted(rows []Transaction, after *int64, budget time.Duration) ([]Transaction, func(Transaction) bool) {
+	if budget <= 0 {
+		return rows, func(Transaction) bool { return true }
+	}
+	l.mu.Lock()
+	from := *after
+	*after = 0 // Unless next stops the pass before the end.
+	l.mu.Unlock()
+	start, _ := slices.BinarySearchFunc(rows, from+1, func(row Transaction, id int64) int { return cmp.Compare(row.ID, id) })
+	deadline := l.now().Add(budget)
+	done := false
+	next := func(row Transaction) bool {
+		if done && !l.now().Before(deadline) {
+			l.mu.Lock()
+			*after = row.ID - 1 // Carry on from this row.
+			l.mu.Unlock()
+			return false
+		}
+		done = true
+		return true
+	}
+	return rows[start:], next
 }
 
 func (l *Ledger) passDue() bool {

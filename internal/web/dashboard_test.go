@@ -124,6 +124,17 @@ func TestDashboardAlertsAndSync(t *testing.T) {
 	}
 }
 
+// Catches: a dashboard that shows nothing, or the old "catching up" answer, while the
+// node's sync state cannot be read (R18).
+func TestDashboardSyncUnknown(t *testing.T) {
+	stub := &stubLedger{syncGone: true}
+	e := newEnv(t, stub)
+	page := body(t, e.do(http.MethodGet, "/", withCookie(e.login())))
+	if !strings.Contains(page, `id="sync-unknown"`) || strings.Contains(page, `id="not-synced"`) {
+		t.Errorf("dashboard while the sync state is unknown:\n%s", page)
+	}
+}
+
 // Catches: a freeze switch the admin cannot see or turn, from the dashboard.
 func TestDashboardFreezeSwitch(t *testing.T) {
 	stub := &stubLedger{}

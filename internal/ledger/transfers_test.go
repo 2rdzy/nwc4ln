@@ -158,7 +158,7 @@ func TestSettlementWaitsForFundCheck(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			if err := e.ledger.trackPending(context.Background()); err != nil {
+			if err := e.ledger.trackPending(context.Background(), 0); err != nil {
 				t.Error(err)
 			}
 		}()

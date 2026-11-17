@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/2rdzy/nwc4ln/internal/node"
 )
@@ -214,6 +215,9 @@ func (l *Ledger) hold(
 	if !internal {
 		if decoded.Destination == l.nodeKey() {
 			return Transaction{}, ErrOwnInvoice
+		}
+		if l.NodeSyncUnknown() {
+			return Transaction{}, ErrSyncUnknown
 		}
 		if !l.NodeSynced() {
 			return Transaction{}, ErrNodeNotSynced
@@ -467,13 +471,17 @@ func impossible(hash string, payment node.Payment) string {
 // and not a list in memory, makes restart and the running sweep the same code. A
 // row with a node call running is asked about too: resolve believes only success
 // for it, because the node may not have seen the payment yet.
-func (l *Ledger) trackPending(ctx context.Context) error {
+func (l *Ledger) trackPending(ctx context.Context, budget time.Duration) error {
 	rows, err := pendingRows(ctx, l.db, TypeOutgoing)
 	if err != nil {
 		return err
 	}
+	rows, next := l.budgeted(rows, &l.outgoingAfter, budget)
 	var errs []error
 	for _, row := range rows {
+		if !next(row) {
+			break
+		}
 		payment, err := l.node.TrackPayment(ctx, row.PaymentHash)
 		if err != nil {
 			errs = append(errs, err) // The payment stays pending.

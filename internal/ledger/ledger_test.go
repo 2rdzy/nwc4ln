@@ -123,6 +123,14 @@ func (e *env) restart() {
 
 func (e *env) advance(d time.Duration) { e.now.Add(int64(d / time.Second)) }
 
+// readSync reads the node's sync state, as the sweep does, after a jump of the clock.
+func (e *env) readSync() {
+	e.t.Helper()
+	if err := e.ledger.readSynced(context.Background()); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
 func (e *env) sweep() {
 	e.t.Helper()
 	if err := e.ledger.sweep(context.Background()); err != nil {
@@ -775,7 +783,7 @@ func TestYoungRowWithNoAttemptIsNotFailed(t *testing.T) {
 	e.start()
 	other := e.fresh(e.node) // Knows nothing of this payment, like a restarted process.
 	e.ledger.beforePay = func() {
-		if err := other.trackPending(context.Background()); err != nil {
+		if err := other.trackPending(context.Background(), 0); err != nil {
 			t.Error(err)
 		}
 	}

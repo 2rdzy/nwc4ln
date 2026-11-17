@@ -95,13 +95,20 @@ func (l *Ledger) checkOpenInvoices(ctx context.Context, accountID int64) error {
 // It runs at each start, and now and then on the sweep. It also runs on each sweep
 // while the index is 0, because the subscription replays nothing from 0: an invoice
 // that settles after a pass and before the stream opens would otherwise never be seen.
-func (l *Ledger) catchUp(ctx context.Context) error {
+//
+// budget bounds a pass on the sweep, which then carries on where it stopped: see
+// budgeted. 0 means no limit, as at the start.
+func (l *Ledger) catchUp(ctx context.Context, budget time.Duration) error {
 	rows, err := pendingRows(ctx, l.db, TypeIncoming)
 	if err != nil {
 		return err
 	}
+	rows, next := l.budgeted(rows, &l.incomingAfter, budget)
 	var errs []error
 	for _, row := range rows {
+		if !next(row) {
+			break
+		}
 		invoice, err := l.node.LookupInvoice(ctx, row.PaymentHash)
 		switch {
 		case errors.Is(err, node.ErrNotFound):
@@ -174,7 +181,7 @@ func (l *Ledger) onSettled(ctx context.Context, invoice node.Invoice) error {
 		return err
 	}
 	if index == 0 {
-		if err := l.catchUp(ctx); err != nil {
+		if err := l.catchUp(ctx, 0); err != nil {
 			return err
 		}
 	}

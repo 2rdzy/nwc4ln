@@ -16,7 +16,9 @@
 <form method="post" action="/subwallets/resume"><button type="submit">Resume sub-wallet spending</button></form>
 </section>
 {{end}}
-{{if not .Synced}}
+{{if .SyncUnknown}}
+<p class="warn" id="sync-unknown"><b>The node's sync state cannot be read.</b> Payments that leave the node are paused until it can be read again. Receiving, and payments between accounts, go on.</p>
+{{else if not .Synced}}
 <p class="warn" id="not-synced"><b>The node is catching up with the chain.</b> Payments that leave the node are paused until it is synced. Receiving, and payments between accounts, go on.</p>
 {{end}}
 {{if not .AlertsKnown}}

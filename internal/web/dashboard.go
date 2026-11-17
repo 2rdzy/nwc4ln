@@ -16,8 +16,9 @@ type dashboardData struct {
 	// Alerts are the open alerts. AlertsKnown is false if they could not be read.
 	Alerts      []ledger.Alert
 	AlertsKnown bool
-	// Synced is the node's last answer about the chain.
-	Synced bool
+	// Synced is the node's last answer about the chain. SyncUnknown means that
+	// answer is too old to rely on.
+	Synced, SyncUnknown bool
 	// Paused is the freeze switch. PausedKnown is false if it could not be read.
 	Paused, PausedKnown bool
 	Overview            ledger.Overview
@@ -46,7 +47,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		data.Known, data.Overview = true, overview
 	}
 	s.noteRead(now, err == nil)
-	data.Synced = s.ledger.NodeSynced()
+	data.Synced, data.SyncUnknown = s.ledger.NodeSynced(), s.ledger.NodeSyncUnknown()
 	if paused, err := s.ledger.SpendingPaused(r.Context()); err != nil {
 		s.log.Warn("dashboard: freeze switch unknown", "error", err)
 	} else {

@@ -27,6 +27,7 @@ type stubLedger struct {
 	reads     atomic.Int64 // Overview calls, each a node read.
 	alerts    []ledger.Alert
 	notSynced bool
+	syncGone  bool
 	closed    int64
 	paused    bool
 }
@@ -46,7 +47,8 @@ func (s *stubLedger) SetSpendingPaused(_ context.Context, paused bool) error {
 	s.paused = paused
 	return nil
 }
-func (s *stubLedger) NodeSynced() bool { return !s.notSynced }
+func (s *stubLedger) NodeSynced() bool      { return !s.notSynced }
+func (s *stubLedger) NodeSyncUnknown() bool { return s.syncGone }
 func (s *stubLedger) AppBudget(context.Context, int64) (*ledger.Budget, error) {
 	return nil, nil
 }
