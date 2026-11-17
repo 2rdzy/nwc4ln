@@ -16,6 +16,11 @@ on:
 permissions:
   contents: read
 
+# The wallet is one of the programs in this repository, in its own folder.
+defaults:
+  run:
+    working-directory: wallet
+
 jobs:
   long:
     name: long (${{ matrix.node }})
@@ -36,12 +41,12 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: wallet/go.mod
           cache: false
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/nwc4ln-it
-          key: nwc4ln-it-${{ runner.os }}-${{ hashFiles('test/integration/versions.env') }}
+          key: nwc4ln-it-${{ runner.os }}-${{ hashFiles('wallet/test/integration/versions.env') }}
       - name: Set the folders
         run: |
           echo "NWC4LN_IT_DIR=$RUNNER_TEMP/nwc4ln-it" >> "$GITHUB_ENV"
@@ -64,7 +69,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: wallet/go.mod
+          cache-dependency-path: wallet/go.sum
       - name: Fuzz each target for a minute
         run: |
           go test -run '^$' -fuzz '^FuzzRequest$' -fuzztime 1m ./internal/nwc

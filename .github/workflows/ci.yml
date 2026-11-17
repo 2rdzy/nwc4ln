@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+# The wallet is one of the programs in this repository, in its own folder.
+defaults:
+  run:
+    working-directory: wallet
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -25,7 +30,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: wallet/go.mod
+          cache-dependency-path: wallet/go.sum
       - name: Format
         run: test -z "$(gofmt -l .)"
       - name: Vet
@@ -58,16 +64,16 @@ jobs:
       # finished binaries are worth keeping.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: wallet/go.mod
           cache: false
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/nwc4ln-it
-          key: nwc4ln-it-${{ runner.os }}-${{ hashFiles('test/integration/versions.env') }}
+          key: nwc4ln-it-${{ runner.os }}-${{ hashFiles('wallet/test/integration/versions.env') }}
       # Only for the acceptance test. The SDK is pinned in its package-lock.json.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version-file: test/integration/nwc/acceptance/.node-version
+          node-version-file: wallet/test/integration/nwc/acceptance/.node-version
       - name: Set the data folder
         run: echo "NWC4LN_IT_DIR=$RUNNER_TEMP/nwc4ln-it" >> "$GITHUB_ENV"
       - name: Vet with the integration tag

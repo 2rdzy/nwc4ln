@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# The wallet is one of the programs in this repository, in its own folder.
+defaults:
+  run:
+    working-directory: wallet
+
 jobs:
   govulncheck:
     name: govulncheck
@@ -22,6 +27,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: wallet/go.mod
+          cache-dependency-path: wallet/go.sum
       - name: govulncheck
         run: scripts/vulncheck.sh
