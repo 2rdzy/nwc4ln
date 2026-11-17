@@ -224,7 +224,7 @@ func (s *Service) infoEvent(c connection) (*nostr.Event, error) {
 		Kind: kindInfo, CreatedAt: nostr.Timestamp(created),
 		Content: strings.Join(s.methodNames(c.canPay, c.canInvoice), " "),
 		Tags: nostr.Tags{
-			{"encryption", encryptionTag},
+			{"encryption", s.encryptionTag()},
 			{"notifications", strings.Join(notificationTypes, " ")},
 			{"extensions", strings.Join(extensions, " ")},
 		},

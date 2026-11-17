@@ -1,8 +1,19 @@
 package web
 
-import "time"
+import (
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+	"unicode/utf8"
+)
 
 const (
+	// maxBody caps a request body. The largest form is a few hundred bytes.
+	maxBody = 64 << 10
+	// maxName caps an app or sub-wallet name, in characters, as the form's
+	// maxlength does in the browser.
+	maxName = 100
 	// formLife is how long a fund or withdraw form can be sent, once.
 	formLife = time.Hour
 	// maxForms caps the form tokens kept. Each page load of a sub-wallet adds two.
@@ -52,4 +63,17 @@ func (s *Server) useFormToken(token string, accountID int64, action string) bool
 	form, ok := s.forms[token]
 	delete(s.forms, token)
 	return ok && form.accountID == accountID && form.action == action && s.now().Sub(form.given) <= formLife
+}
+
+// nameFromForm reads an app or sub-wallet name. A browser enforces maxlength, but
+// a request can come from anything that holds the session.
+func nameFromForm(r *http.Request, what string) (string, error) {
+	name := strings.TrimSpace(r.PostFormValue("name"))
+	if name == "" {
+		return "", fmt.Errorf("The %s needs a name.", what)
+	}
+	if utf8.RuneCountInString(name) > maxName {
+		return "", fmt.Errorf("The name can be at most %d characters.", maxName)
+	}
+	return name, nil
 }

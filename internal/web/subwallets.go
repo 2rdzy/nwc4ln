@@ -86,9 +86,9 @@ type connectionPage struct {
 // createSubWallet shows the connection string in its own response, once, as
 // createApp does.
 func (s *Server) createSubWallet(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimSpace(r.PostFormValue("name"))
-	if name == "" {
-		s.problem(w, http.StatusBadRequest, "The sub-wallet needs a name.")
+	name, err := nameFromForm(r, "sub-wallet")
+	if err != nil {
+		s.problem(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	connectionString, err := s.wallets.AddSubWallet(r.Context(), name)

@@ -35,6 +35,9 @@ type Config struct {
 	// AllowedHosts are extra host names the admin UI answers to, such as a local
 	// proxy's name. localhost, 127.0.0.1 and ::1 are always allowed.
 	AllowedHosts []string `toml:"allowed_hosts,omitempty"`
+	// DisableNIP04 turns off the old NWC encryption. Absent or false, NIP-04 is
+	// accepted beside NIP-44, so older clients keep working.
+	DisableNIP04 bool `toml:"disable_nip04,omitempty"`
 }
 
 // Default returns the settings for a new config file.

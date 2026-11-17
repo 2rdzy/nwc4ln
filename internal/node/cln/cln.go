@@ -176,11 +176,17 @@ func New(cfg Config, options ...Option) (*Client, error) {
 	}
 	c := &Client{
 		base: strings.TrimSuffix(cfg.URL, "/"),
-		http: &http.Client{Transport: &http.Transport{
-			TLSClientConfig:     &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
-			TLSHandshakeTimeout: 15 * time.Second,
-			MaxIdleConnsPerHost: 4,
-		}},
+		http: &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig:     &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+				TLSHandshakeTimeout: 15 * time.Second,
+				MaxIdleConnsPerHost: 4,
+			},
+			// Never follow a redirect: the request carries the rune, and a redirect
+			// could send it to another host or over plain HTTP. The 3xx answer
+			// comes back to call, which treats it as an error.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		rune: rune,
 		now:  time.Now,
 	}
@@ -244,6 +250,9 @@ func (c *Client) call(ctx context.Context, method string, params, out any) error
 	if err != nil {
 		return fmt.Errorf("cln: %s: %w", method, err)
 	}
+	if response.StatusCode >= 300 && response.StatusCode < 400 {
+		return fmt.Errorf("cln: %s: HTTP %s: redirects are refused, set cln_url to the final address", method, response.Status)
+	}
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusCreated {
 		var rpc struct {
 			Code    *int            `json:"code"`
@@ -251,14 +260,21 @@ func (c *Client) call(ctx context.Context, method string, params, out any) error
 			Data    json.RawMessage `json:"data"`
 		}
 		if json.Unmarshal(data, &rpc) == nil && rpc.Code != nil {
-			return &RPCError{Method: method, Code: *rpc.Code, Message: rpc.Message, Data: rpc.Data}
+			return &RPCError{Method: method, Code: *rpc.Code, Message: c.redact(rpc.Message), Data: rpc.Data}
 		}
-		return fmt.Errorf("cln: %s: HTTP %s: %.200s", method, response.Status, data)
+		return fmt.Errorf("cln: %s: HTTP %s: %.200s", method, response.Status, c.redact(string(data)))
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("cln: %s: bad reply: %w", method, err)
 	}
 	return nil
+}
+
+// redact removes the rune from text the node sent back. Core Lightning run with
+// developer APIs repeats a malformed parameter in its error message, and a
+// malformed rune is one, so the rune could otherwise reach the log.
+func (c *Client) redact(text string) string {
+	return strings.ReplaceAll(text, c.rune, "<rune>")
 }
 
 // quick runs a call that should answer at once.

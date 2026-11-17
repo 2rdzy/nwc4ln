@@ -54,7 +54,9 @@ func (s *Service) notify(ctx context.Context, row ledger.Transaction) {
 			continue // Expired or deleted: the connection has stopped working.
 		}
 		s.publishNotification(ctx, c, payload, schemeNIP44, kindNotification)
-		s.publishNotification(ctx, c, payload, schemeNIP04, kindNotificationNIP04)
+		if !s.noNIP04 {
+			s.publishNotification(ctx, c, payload, schemeNIP04, kindNotificationNIP04)
+		}
 	}
 }
 

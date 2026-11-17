@@ -71,6 +71,21 @@ func TestWriteThenLoad(t *testing.T) {
 	}
 }
 
+// A failure here means the documented disable_nip04 line is refused as unknown or
+// ignored, or that a file without it turns NIP-04 off.
+func TestDisableNIP04Key(t *testing.T) {
+	base := "data_dir='/d'\nlisten='127.0.0.1:1'\n"
+	for content, want := range map[string]bool{base: false, base + "disable_nip04 = true\n": true} {
+		cfg, err := Load(writeFile(t, content))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.DisableNIP04 != want {
+			t.Fatalf("%q: DisableNIP04 = %v", content, cfg.DisableNIP04)
+		}
+	}
+}
+
 // A failure here means a repeated write replaces the operator's settings.
 func TestWriteRefusesExistingFile(t *testing.T) {
 	path := writeFile(t, "keep me")

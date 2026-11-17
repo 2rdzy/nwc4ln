@@ -219,6 +219,9 @@ func runStart(ctx context.Context, configPath string, out io.Writer) (err error)
 	if err != nil {
 		return err
 	}
+	if cfg.DisableNIP04 {
+		service.DisableNIP04()
+	}
 	money.OnSettled(service.Notify)
 	ui, err := web.New(web.Config{
 		AdminKey: adminKey, AllowedHosts: cfg.AllowedHosts, NodeType: cfg.NodeType(), Ledger: money, Apps: service, SubWallets: service,

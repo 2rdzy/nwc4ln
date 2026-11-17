@@ -114,9 +114,9 @@ func (s *Server) newAppPage(w http.ResponseWriter, _ *http.Request) {
 // public key is stored, so it cannot be shown again. The page is not cached
 // (Cache-Control: no-store), and there is no redirect that would carry it.
 func (s *Server) createApp(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimSpace(r.PostFormValue("name"))
-	if name == "" {
-		s.problem(w, http.StatusBadRequest, "The app needs a name.")
+	name, err := nameFromForm(r, "app")
+	if err != nil {
+		s.problem(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	settings, err := settingsFromForm(r)

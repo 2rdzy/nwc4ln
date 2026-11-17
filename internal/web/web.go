@@ -177,6 +177,25 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			http.Error(w, "log in first", http.StatusUnauthorized)
 			return
 		}
+		if r.Method == http.MethodPost {
+			// Cap every body, and read the form here, so that no page can be sent a
+			// body larger than any form needs. Login reads its own body, to check
+			// the NIP-98 payload hash, so its form is left unread.
+			r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+			if public(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if err := r.ParseForm(); err != nil {
+				var tooLarge *http.MaxBytesError
+				if errors.As(err, &tooLarge) {
+					http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+					return
+				}
+				http.Error(w, "unreadable form", http.StatusBadRequest)
+				return
+			}
+		}
 		next.ServeHTTP(w, r)
 	})
 }

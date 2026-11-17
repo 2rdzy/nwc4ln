@@ -68,6 +68,8 @@ jobs:
       - name: Fuzz each target for a minute
         run: |
           go test -run '^$' -fuzz '^FuzzRequest$' -fuzztime 1m ./internal/nwc
+          go test -run '^$' -fuzz '^FuzzDecryptNIP04$' -fuzztime 1m ./internal/nwc
+          go test -run '^$' -fuzz '^FuzzDecryptNIP44$' -fuzztime 1m ./internal/nwc
           go test -run '^$' -fuzz '^FuzzPayAmount$' -fuzztime 1m ./internal/ledger
           go test -run '^$' -fuzz '^FuzzAmountFromForm$' -fuzztime 1m ./internal/web
           go test -run '^$' -fuzz '^FuzzSettingsFromForm$' -fuzztime 1m ./internal/web
