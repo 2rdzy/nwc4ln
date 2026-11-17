@@ -152,7 +152,7 @@ func TestPruneRequests(t *testing.T) {
 	paid := insert("old-paid", old)
 	// Only the ledger writes transactions, so the row comes from it.
 	_, err := e.ledger.MakeInvoice(t.Context(), ledger.InvoiceRequest{
-		AccountID: e.accountOf(e.client), AmountMsat: sat, RequestID: paid,
+		AccountID: e.accountOf(e.client), ConnectionID: e.connectionOf(e.client), AmountMsat: sat, RequestID: paid,
 	})
 	if err != nil {
 		t.Fatal(err)

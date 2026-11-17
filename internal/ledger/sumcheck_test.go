@@ -136,7 +136,7 @@ func (b *book) income() {
 		b.wallets[id] += amount
 		return
 	}
-	row, err := b.e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: b.e.acct, AmountMsat: amount})
+	row, err := b.e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: b.e.acct, ConnectionID: b.e.connection(b.e.acct), AmountMsat: amount})
 	if err != nil {
 		b.e.t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func (b *book) openInvoice() {
 	if !ok {
 		return
 	}
-	row, err := b.e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: id, AmountMsat: b.amount()})
+	row, err := b.e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: id, ConnectionID: b.e.connection(id), AmountMsat: b.amount()})
 	if err != nil {
 		b.e.t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func (b *book) payInternal() {
 	if payee == payer {
 		return
 	}
-	row, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: payee, AmountMsat: amount})
+	row, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: payee, ConnectionID: e.connection(payee), AmountMsat: amount})
 	if err != nil {
 		e.t.Fatal(err)
 	}

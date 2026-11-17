@@ -177,7 +177,7 @@ func TestInFlightRaisesNoShortfall(t *testing.T) {
 				t.Fatal("the payment stayed pending")
 			}
 			time.Sleep(time.Second)
-			if row, err = money.Lookup(ctx, wallet, hash, ""); err != nil {
+			if row, err = money.Lookup(ctx, wallet, 0, hash, ""); err != nil {
 				t.Fatal(err)
 			}
 		}

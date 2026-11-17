@@ -40,7 +40,7 @@ func (e *env) balance(id int64) int64 {
 func (e *env) fund(id, amountMsat int64) {
 	e.t.Helper()
 	before := e.balance(id)
-	row, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: id, AmountMsat: amountMsat})
+	row, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: id, ConnectionID: e.connection(id), AmountMsat: amountMsat})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -360,7 +360,7 @@ func TestOpenInvoiceCap(t *testing.T) {
 	e.ledger.maxOpenInvoices = 2
 	ctx := context.Background()
 	make := func(account int64, seconds int64) (Transaction, error) {
-		return e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: account, AmountMsat: 1 * sat, ExpirySeconds: seconds})
+		return e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: account, ConnectionID: e.connection(account), AmountMsat: 1 * sat, ExpirySeconds: seconds})
 	}
 	first, err := make(e.acct, 60)
 	if err != nil {
@@ -408,7 +408,7 @@ func TestDescriptionCap(t *testing.T) {
 	}
 	for _, c := range cases {
 		_, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{
-			AccountID: e.acct, AmountMsat: 1 * sat, Description: c.description,
+			AccountID: e.acct, ConnectionID: e.connection(e.acct), AmountMsat: 1 * sat, Description: c.description,
 		})
 		if !errors.Is(err, c.want) {
 			t.Errorf("%d bytes: %v", len(c.description), err)
@@ -427,7 +427,7 @@ func TestInvoiceExpiryBounds(t *testing.T) {
 		18446747674: false, math.MaxInt64/int64(time.Second) + 61: false, math.MaxInt64: false,
 	} {
 		_, err := e.ledger.MakeInvoice(context.Background(),
-			InvoiceRequest{AccountID: e.acct, AmountMsat: sat, ExpirySeconds: seconds})
+			InvoiceRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), AmountMsat: sat, ExpirySeconds: seconds})
 		if ok && err != nil || !ok && !errors.Is(err, ErrBadExpiry) {
 			t.Errorf("expiry %d: %v", seconds, err)
 		}
@@ -441,7 +441,7 @@ func TestDailyInvoiceCap(t *testing.T) {
 	e.start()
 	e.ledger.maxDailyInvoices = 3
 	make := func() error {
-		_, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: e.acct, AmountMsat: sat, ExpirySeconds: 60})
+		_, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), AmountMsat: sat, ExpirySeconds: 60})
 		e.advance(61 * time.Second) // Each one has expired before the next.
 		return err
 	}

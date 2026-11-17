@@ -88,7 +88,7 @@ func newSlowEnv(t *testing.T) (*env, *slowNode) {
 func TestShortfallCheckOnTime(t *testing.T) {
 	e, slow := newSlowEnv(t)
 	for range 1000 {
-		if _, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: e.acct, AmountMsat: sat}); err != nil {
+		if _, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), AmountMsat: sat}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -128,7 +128,7 @@ func TestPassCarriesOn(t *testing.T) {
 	e, slow := newSlowEnv(t)
 	var hashes []string
 	for range 5 {
-		row, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: e.acct, AmountMsat: sat})
+		row, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), AmountMsat: sat})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -185,13 +185,21 @@ func (l *Ledger) History(ctx context.Context, query HistoryQuery) ([]Transaction
 // Lookup finds an account's transaction by payment hash, or by invoice text if
 // the hash is empty. Two rows can match, after a retry or when an account pays its
 // own invoice: the outgoing row comes first, then the newest. It needs no node.
-func (l *Ledger) Lookup(ctx context.Context, accountID int64, hash, invoice string) (Transaction, error) {
+//
+// madeBy, if not 0, limits the search to the incoming rows that connection made
+// itself: see MadeBy.
+func (l *Ledger) Lookup(ctx context.Context, accountID, madeBy int64, hash, invoice string) (Transaction, error) {
 	column, value := "payment_hash", strings.ToLower(hash)
 	if hash == "" {
 		column, value = "invoice", strings.ToLower(invoice)
 	}
-	rows, err := listRows(ctx, l.db, "account_id = ? AND "+column+" = ? ORDER BY type = 'outgoing' DESC, id DESC LIMIT 1",
-		accountID, value)
+	where := "account_id = ? AND " + column + " = ?"
+	args := []any{accountID, value}
+	if madeBy != 0 {
+		where += " AND type = 'incoming' AND request_id IN (SELECT id FROM requests WHERE connection_id = ?)"
+		args = append(args, madeBy)
+	}
+	rows, err := listRows(ctx, l.db, where+" ORDER BY type = 'outgoing' DESC, id DESC LIMIT 1", args...)
 	if err != nil {
 		return Transaction{}, err
 	}
@@ -199,6 +207,20 @@ func (l *Ledger) Lookup(ctx context.Context, accountID int64, hash, invoice stri
 		return Transaction{}, ErrNotFound
 	}
 	return rows[0], nil
+}
+
+// MadeBy reports whether a row is an invoice that a connection asked for itself.
+// Rows from the admin UI, and payments, are made by no connection. A requests row
+// that a transaction refers to is never pruned, so the answer does not change with
+// age.
+func (l *Ledger) MadeBy(ctx context.Context, row Transaction, connectionID int64) (bool, error) {
+	if row.Type != TypeIncoming || row.RequestID == 0 || connectionID == 0 {
+		return false, nil
+	}
+	var made bool
+	err := l.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM requests WHERE id = ? AND connection_id = ?)`,
+		row.RequestID, connectionID).Scan(&made)
+	return made, err
 }
 
 func changedOne(result sql.Result, err error) (bool, error) {

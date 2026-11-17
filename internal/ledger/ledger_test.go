@@ -149,7 +149,7 @@ func (e *env) pay(invoice string) Transaction {
 
 func (e *env) invoice(amount int64) Transaction {
 	e.t.Helper()
-	tx, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: e.acct, AmountMsat: amount})
+	tx, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), AmountMsat: amount})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -996,7 +996,7 @@ func TestOnSettledCoversEveryPath(t *testing.T) {
 	e.sweep() // A second look at the same payment must not report it again.
 	wantLast("the sweep", 2, TypeOutgoing, slow.PaymentHash)
 
-	income, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, AmountMsat: 1_000 * sat})
+	income, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), AmountMsat: 1_000 * sat})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1005,7 +1005,7 @@ func TestOnSettledCoversEveryPath(t *testing.T) {
 	}
 	wantLast("the stream", 3, TypeIncoming, income.PaymentHash)
 
-	own, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, AmountMsat: 1_000 * sat})
+	own, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), AmountMsat: 1_000 * sat})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1015,7 +1015,7 @@ func TestOnSettledCoversEveryPath(t *testing.T) {
 		t.Fatalf("payer side: %+v", rows[3])
 	}
 
-	down, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, AmountMsat: 1_000 * sat})
+	down, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), AmountMsat: 1_000 * sat})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1061,12 +1061,12 @@ func TestOnSettledRunsAfterCommit(t *testing.T) {
 		calls.Add(1)
 	})
 	e.start()
-	own, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, AmountMsat: 1_000 * sat})
+	own, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), AmountMsat: 1_000 * sat})
 	if err != nil {
 		t.Fatal(err)
 	}
 	e.pay(own.Invoice)
-	income, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, AmountMsat: 1_000 * sat})
+	income, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), AmountMsat: 1_000 * sat})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1128,7 +1128,7 @@ func TestHistoryWindow(t *testing.T) {
 	first := e.now.Load()
 	var hashes []string
 	for range 4 {
-		row, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, AmountMsat: sat})
+		row, err := e.ledger.MakeInvoice(ctx, InvoiceRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), AmountMsat: sat})
 		if err != nil {
 			t.Fatal(err)
 		}

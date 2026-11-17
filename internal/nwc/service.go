@@ -511,6 +511,27 @@ func permitted(method string, canPay, canInvoice bool) bool {
 	}
 }
 
+// readScope is the one rule for what a connection may be told about the rows of
+// its account, in replies and in notifications alike. With pay on it may read every
+// row. With pay off it may read only the incoming rows it made itself, because a
+// public service may hold such a key (owner, RV5). It returns the connection to
+// limit reads to, or 0 for no limit, as Ledger.Lookup takes it.
+func readScope(settings ledger.AppSettings, c connection) int64 {
+	if settings.CanPay {
+		return 0
+	}
+	return c.id
+}
+
+// notificationNames lists what a connection may be told about, for clients to
+// read. It follows readScope: with pay off a connection gets no payment_sent.
+func notificationNames(canPay bool) []string {
+	if canPay {
+		return notificationTypes
+	}
+	return []string{"payment_received"}
+}
+
 // methodNames lists what a connection may call, for clients to read.
 func (s *Service) methodNames(canPay, canInvoice bool) []string {
 	var names []string

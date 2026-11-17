@@ -69,7 +69,7 @@ func TestPauseCoversOnlySubWalletSpending(t *testing.T) {
 	if err := pay(wallet, e.node.OutsideInvoice(sat)); !errors.Is(err, ErrSpendingPaused) {
 		t.Fatalf("sub-wallet paying out: %v", err)
 	}
-	toOther, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: other, AmountMsat: sat})
+	toOther, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: other, ConnectionID: e.connection(other), AmountMsat: sat})
 	if err != nil {
 		t.Fatal(err)
 	}

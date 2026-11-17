@@ -185,7 +185,7 @@ func TestAppPageShowsPendingRows(t *testing.T) {
 	}
 	t.Cleanup(e.ledger.Close)
 	if _, err := e.ledger.MakeInvoice(t.Context(), ledger.InvoiceRequest{
-		AccountID: id, AmountMsat: 21_500, Description: "coffee <b>",
+		AccountID: id, ConnectionID: e.connection(id), AmountMsat: 21_500, Description: "coffee <b>",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -423,4 +423,16 @@ func TestAppReplaceConnection(t *testing.T) {
 	if after := e.apps()[0]; limitOf(after) != "7000" || after.Renewal != ledger.RenewDaily || !after.CanPay {
 		t.Fatalf("settings changed: %+v", after)
 	}
+}
+
+// connection is the live connection of an account, which the ledger needs to
+// make an invoice.
+func (e *appsEnv) connection(account int64) int64 {
+	e.t.Helper()
+	var id int64
+	err := e.db.DB.QueryRow(`SELECT id FROM connections WHERE account_id = ? AND revoked_at IS NULL`, account).Scan(&id)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return id
 }

@@ -37,9 +37,13 @@ const (
 
 	minReserveMsat = 10_000
 
-	// MaxDescriptionBytes is the most a BOLT 11 description can hold. It also keeps a
-	// page of list_transactions under NIP-44's size limit.
+	// MaxDescriptionBytes is the most a BOLT 11 description can hold.
 	MaxDescriptionBytes = 639
+
+	// MaxInvoiceBytes is the longest invoice text the ledger pays, LND's own limit
+	// (the most a QR code holds). It keeps every row small enough to send in one
+	// NWC reply: the largest such row is about 34 KB of JSON.
+	MaxInvoiceBytes = 7_089
 
 	// maxOpenInvoices caps the unexpired, unpaid invoices of one account. Each one
 	// costs a node call on every pass over pending invoices.
@@ -102,6 +106,8 @@ var (
 	ErrBadAmount           = errors.New("bad amount")
 	ErrBadRenewal          = errors.New("bad renewal period")
 	ErrInvoiceExpired      = errors.New("invoice has expired")
+	// ErrInvoiceTooLong means an invoice to pay is longer than MaxInvoiceBytes.
+	ErrInvoiceTooLong = errors.New("invoice is too long")
 	// ErrDescriptionTooLong means a description does not fit in an invoice.
 	ErrDescriptionTooLong = errors.New("description is too long")
 	// ErrBadExpiry means an invoice expiry outside the allowed range.
