@@ -20,11 +20,20 @@ type InvoiceRequest struct {
 	ExpirySeconds int64
 	// RequestID is the requests row, or 0.
 	RequestID int64
+	// ConnectionID is the connection that asked. It must be a connection of the
+	// account, not revoked, when the row is stored: a connection replaced while the
+	// node makes the invoice must not get it. Any role may ask. 0 is refused.
+	ConnectionID int64
 }
 
 // MakeInvoice creates an invoice at the node and records it in the account's
 // history. If the process stops between the two, the invoice has no row, and any
 // income on it counts as main wallet.
+//
+// The checks run before the node call, so that a refused request costs no node
+// work, and again in the write transaction that stores the row, so that a
+// connection replaced or a cap reached during the call is seen. An invoice refused
+// at that point stays at the node, is shown to nobody, and expires.
 func (l *Ledger) MakeInvoice(ctx context.Context, request InvoiceRequest) (Transaction, error) {
 	if request.AmountMsat <= 0 || request.AmountMsat > MaxAmountMsat {
 		return Transaction{}, fmt.Errorf("%w: %d", ErrBadAmount, request.AmountMsat)
@@ -38,14 +47,7 @@ func (l *Ledger) MakeInvoice(ctx context.Context, request InvoiceRequest) (Trans
 		(seconds < int64(minInvoiceExpiry/time.Second) || seconds > int64(maxInvoiceExpiry/time.Second)) {
 		return Transaction{}, ErrBadExpiry
 	}
-	settings, err := l.checkAccount(ctx, l.db, request.AccountID)
-	if err != nil {
-		return Transaction{}, err
-	}
-	if !settings.CanInvoice {
-		return Transaction{}, ErrRestricted
-	}
-	if err := l.checkOpenInvoices(ctx, request.AccountID); err != nil {
+	if err := l.checkInvoice(ctx, l.db, request); err != nil {
 		return Transaction{}, err
 	}
 	invoice, err := l.node.MakeInvoice(ctx, node.InvoiceRequest{
@@ -60,21 +62,64 @@ func (l *Ledger) MakeInvoice(ctx context.Context, request InvoiceRequest) (Trans
 		AmountMsat: request.AmountMsat, Invoice: invoice.PaymentRequest, Description: invoice.Description,
 		PaymentHash: invoice.Hash, Preimage: invoice.Preimage, CreatedAt: l.now(), ExpiresAt: invoice.ExpiresAt,
 	}
-	if row.ID, err = insert(ctx, l.db, row); err != nil {
+	// Write transactions take the lock when they begin, so a replace of the
+	// connection, or another invoice, is either seen here or comes after this row.
+	tx, err := l.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Transaction{}, err
+	}
+	defer func() { _ = tx.Rollback() }() // Does nothing after a commit.
+	if err := l.checkInvoice(ctx, tx, request); err != nil {
+		return Transaction{}, err
+	}
+	if row.ID, err = insert(ctx, tx, row); err != nil {
+		return Transaction{}, fmt.Errorf("store invoice: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
 		return Transaction{}, fmt.Errorf("store invoice: %w", err)
 	}
 	return row, nil
 }
 
+// checkInvoice decides whether an account may get a new invoice now, through
+// this connection.
+func (l *Ledger) checkInvoice(ctx context.Context, db querier, request InvoiceRequest) error {
+	settings, err := l.checkAccount(ctx, db, request.AccountID)
+	if err != nil {
+		return err
+	}
+	if !settings.CanInvoice {
+		return ErrRestricted
+	}
+	if err := checkAnyConnection(ctx, db, request.ConnectionID, request.AccountID); err != nil {
+		return err
+	}
+	return l.checkOpenInvoices(ctx, db, request.AccountID)
+}
+
+// checkAnyConnection refuses a connection that is revoked or not the account's.
+// Unlike checkConnection, any role passes: a receive-only connection may make
+// invoices.
+func checkAnyConnection(ctx context.Context, db querier, connectionID, accountID int64) error {
+	var usable bool
+	err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM connections
+		WHERE id = ? AND account_id = ? AND revoked_at IS NULL)`, connectionID, accountID).Scan(&usable)
+	if err != nil {
+		return err
+	}
+	if !usable {
+		return ErrConnectionRevoked
+	}
+	return nil
+}
+
 // checkOpenInvoices refuses a new invoice if the account has too many open, or made
 // too many in the last 24 hours. An expired invoice is not open, even while its row
-// is pending, so the daily count is what bounds invoices with a short expiry. The
-// counts come before the node call, so requests running at once can pass them by a
-// few. The rate limit in internal/nwc bounds how many.
-func (l *Ledger) checkOpenInvoices(ctx context.Context, accountID int64) error {
+// is pending, so the daily count is what bounds invoices with a short expiry.
+func (l *Ledger) checkOpenInvoices(ctx context.Context, db querier, accountID int64) error {
 	now := l.now()
 	var open, today int
-	err := l.db.QueryRowContext(ctx, `SELECT
+	err := db.QueryRowContext(ctx, `SELECT
 			count(CASE WHEN state = 'pending' AND expires_at > ? THEN 1 END),
 			count(CASE WHEN created_at > ? THEN 1 END)
 		FROM transactions WHERE account_id = ? AND type = 'incoming'`,

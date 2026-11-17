@@ -16,10 +16,14 @@ const (
 	// that. The ledger's own node call ends near 55 seconds.
 	payWait = 57 * time.Second
 
-	// maxPage caps list_transactions, as NWC-05 advises. A larger page could pass
-	// NIP-44's limit of 65,535 bytes, and then no reply could be sent at all.
+	// maxPage caps list_transactions, as NWC-05 advises. Rows can be large, so a
+	// page is also cut to fit maxPlain: see listTransactions.
 	maxPage = 20
 )
+
+// errRowTooLarge answers a page whose first row alone does not fit in a reply.
+// Rows are never cut: a cut invoice is worse than none.
+var errRowTooLarge = &Error{Code: codeOther, Message: "this transaction is too large to send"}
 
 // What this service offers beyond the core commands, for clients to read.
 var (
@@ -101,7 +105,7 @@ func (s *Service) getInfo(ctx context.Context, a *accepted, _ json.RawMessage) (
 	return getInfoResult{
 		Alias: info.Alias, Color: info.Color, PubKey: info.PubKey, Network: info.Network,
 		BlockHeight: info.BlockHeight, BlockHash: info.BlockHash, Methods: s.methodNames(a.settings.CanPay, a.settings.CanInvoice),
-		Extensions: extensions, Notifications: notificationTypes,
+		Extensions: extensions, Notifications: notificationNames(a.settings.CanPay),
 	}, nil
 }
 
@@ -208,6 +212,8 @@ func (s *Service) refused(command string, err error) *Error {
 		message = "cannot read the node's sync state, try again later"
 	case errors.Is(err, ledger.ErrBadExpiry):
 		message = "expiry must be from 60 seconds to 7 days"
+	case errors.Is(err, ledger.ErrInvoiceTooLong):
+		message = "invoice is too long"
 	case errors.Is(err, ledger.ErrDescriptionTooLong):
 		message = "description is too long"
 	case errors.Is(err, ledger.ErrAlreadyPaid):
@@ -247,6 +253,7 @@ func (s *Service) makeInvoice(ctx context.Context, a *accepted, raw json.RawMess
 	row, err := s.ledger.MakeInvoice(ctx, ledger.InvoiceRequest{
 		AccountID: a.connection.accountID, AmountMsat: params.Amount, Description: params.Description,
 		DescriptionHash: params.DescriptionHash, ExpirySeconds: params.Expiry, RequestID: a.rowID,
+		ConnectionID: a.connection.id,
 	})
 	if err != nil {
 		return nil, s.refused("make_invoice", err)
@@ -267,7 +274,8 @@ func (s *Service) lookupInvoice(ctx context.Context, a *accepted, raw json.RawMe
 	if params.PaymentHash == "" && params.Invoice == "" {
 		return nil, &Error{Code: codeOther, Message: "payment_hash or invoice is required"}
 	}
-	row, err := s.ledger.Lookup(ctx, a.connection.accountID, params.PaymentHash, params.Invoice)
+	row, err := s.ledger.Lookup(ctx, a.connection.accountID, readScope(a.settings, a.connection), params.PaymentHash,
+		params.Invoice)
 	if errors.Is(err, ledger.ErrNotFound) {
 		return nil, &Error{Code: codeNotFound, Message: "invoice not found"}
 	}
@@ -316,9 +324,39 @@ func (s *Service) listTransactions(ctx context.Context, a *accepted, raw json.Ra
 	if err != nil {
 		return nil, s.refused("list_transactions", err)
 	}
+	return s.fitPage(rows, total)
+}
+
+// fitPage turns rows into the longest page whose whole reply fits in maxPlain, for
+// both encryptions. total_count stays the number of rows that match, so a client
+// that moves offset by the rows it got reaches every row. A page can therefore
+// hold fewer rows than asked for while more remain.
+func (s *Service) fitPage(rows []ledger.Transaction, total int64) (any, *Error) {
 	result := listResult{Transactions: make([]transaction, 0, len(rows)), TotalCount: total}
-	for _, row := range rows {
-		result.Transactions = append(result.Transactions, s.present(row))
+	// JSON writes a list as "[", the items joined by ",", and "]", so the size of
+	// the reply grows by each item, plus one comma after the first.
+	empty, err := json.Marshal(response{ResultType: "list_transactions", Result: result})
+	if err != nil {
+		return nil, &Error{Code: codeInternal, Message: "internal error"}
+	}
+	size := len(empty)
+	for i, row := range rows {
+		shown := s.present(row)
+		item, err := json.Marshal(shown)
+		if err != nil {
+			return nil, &Error{Code: codeInternal, Message: "internal error"}
+		}
+		size += len(item)
+		if i > 0 {
+			size++
+		}
+		if size > maxPlain {
+			if i == 0 {
+				return nil, errRowTooLarge
+			}
+			break
+		}
+		result.Transactions = append(result.Transactions, shown)
 	}
 	return result, nil
 }

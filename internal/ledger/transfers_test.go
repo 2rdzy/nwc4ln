@@ -536,7 +536,7 @@ func TestIncomeAfterDelete(t *testing.T) {
 	e.start()
 	wallet := e.addSubWallet()
 	e.fund(wallet, 300*sat)
-	in, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: wallet, AmountMsat: 700 * sat})
+	in, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: wallet, ConnectionID: e.connection(wallet), AmountMsat: 700 * sat})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +565,7 @@ func TestDeleteCancelsOpenInvoices(t *testing.T) {
 	e := newEnv(t)
 	e.start()
 	wallet := e.addSubWallet()
-	in, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: wallet, AmountMsat: 700 * sat})
+	in, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: wallet, ConnectionID: e.connection(wallet), AmountMsat: 700 * sat})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,7 +600,7 @@ func TestDeletedAccountsInvoiceIsClosed(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			in, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: owner, AmountMsat: 100 * sat})
+			in, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: owner, ConnectionID: e.connection(owner), AmountMsat: 100 * sat})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -674,7 +674,7 @@ func TestDeleteDuringATransfer(t *testing.T) {
 			e.ledger = e.fresh(gate)
 			e.start()
 			wallet := e.addSubWallet()
-			in, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: wallet, AmountMsat: 100 * sat})
+			in, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: wallet, ConnectionID: e.connection(wallet), AmountMsat: 100 * sat})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -753,7 +753,7 @@ func TestEachPair(t *testing.T) {
 			case payee == 0:
 				hash = e.move(e.ledger.Withdraw, payer, amount).PaymentHash
 			default:
-				in, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: payee, AmountMsat: amount})
+				in, err := e.ledger.MakeInvoice(context.Background(), InvoiceRequest{AccountID: payee, ConnectionID: e.connection(payee), AmountMsat: amount})
 				if err != nil {
 					t.Fatal(err)
 				}

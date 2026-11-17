@@ -352,7 +352,7 @@ func TestDeletePageShowsExactBalance(t *testing.T) {
 	e := newAppsEnv(t)
 	e.start()
 	id, _ := e.addSubWallet("alice")
-	invoice, err := e.ledger.MakeInvoice(t.Context(), ledger.InvoiceRequest{AccountID: id, AmountMsat: 21_500})
+	invoice, err := e.ledger.MakeInvoice(t.Context(), ledger.InvoiceRequest{AccountID: id, ConnectionID: e.connection(id), AmountMsat: 21_500})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +380,7 @@ func TestTransactionsPage(t *testing.T) {
 	app := e.apps()[0].ID
 	for i := range 49 {
 		if _, err := e.ledger.MakeInvoice(t.Context(), ledger.InvoiceRequest{
-			AccountID: app, AmountMsat: 1_000, Description: fmt.Sprintf("row-%02d", i),
+			AccountID: app, ConnectionID: e.connection(app), AmountMsat: 1_000, Description: fmt.Sprintf("row-%02d", i),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -390,7 +390,7 @@ func TestTransactionsPage(t *testing.T) {
 	// A deleted sub-wallet with money would get a move from the sweep during the test,
 	// so this one has an open invoice only.
 	gone, _ := e.addSubWallet("gone")
-	if _, err := e.ledger.MakeInvoice(t.Context(), ledger.InvoiceRequest{AccountID: gone, AmountMsat: 2_000}); err != nil {
+	if _, err := e.ledger.MakeInvoice(t.Context(), ledger.InvoiceRequest{AccountID: gone, ConnectionID: e.connection(gone), AmountMsat: 2_000}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.service.DeleteSubWallet(t.Context(), gone); err != nil {

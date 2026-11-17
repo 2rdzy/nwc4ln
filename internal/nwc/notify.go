@@ -2,6 +2,7 @@ package nwc
 
 import (
 	"context"
+	"errors"
 
 	"github.com/2rdzy/nwc4ln/internal/ledger"
 )
@@ -35,7 +36,8 @@ func (s *Service) notifyLoop(ctx context.Context) {
 	}
 }
 
-// notify tells the row's account about it, on each of its live connections.
+// notify tells the row's account about it, on each of its live connections that
+// may read the row (readScope).
 func (s *Service) notify(ctx context.Context, row ledger.Transaction) {
 	kind := "payment_received"
 	if row.Type == ledger.TypeOutgoing {
@@ -50,8 +52,19 @@ func (s *Service) notify(ctx context.Context, row ledger.Transaction) {
 		if err != nil || revoked {
 			continue
 		}
-		if _, err := s.ledger.Access(ctx, c.accountID); err != nil {
+		settings, err := s.ledger.Access(ctx, c.accountID)
+		if err != nil {
 			continue // Expired or deleted: the connection has stopped working.
+		}
+		if scope := readScope(settings, c); scope != 0 {
+			made, err := s.ledger.MadeBy(ctx, row, scope)
+			if err != nil {
+				s.log.Warn("notification not sent: cannot read who made the row", "connection", c.id, "error", err)
+				continue
+			}
+			if !made {
+				continue
+			}
 		}
 		s.publishNotification(ctx, c, payload, schemeNIP44, kindNotification)
 		if !s.noNIP04 {
@@ -64,6 +77,10 @@ func (s *Service) notify(ctx context.Context, row ledger.Transaction) {
 // listens for, and that is normal here, so it is logged quietly.
 func (s *Service) publishNotification(ctx context.Context, c connection, payload notification, scheme string, kind int) {
 	event, err := s.sealTo(c, payload, scheme, kind)
+	if errors.Is(err, errReplyTooLarge) {
+		s.log.Warn("notification not sent: too large", "connection", c.id, "hash", payload.Notification.PaymentHash)
+		return
+	}
 	if err == nil {
 		err = s.publish(ctx, *event)
 	}

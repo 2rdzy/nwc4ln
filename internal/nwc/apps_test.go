@@ -25,6 +25,16 @@ func (e *env) accountOf(client *nwctest.Client) int64 {
 	return c.accountID
 }
 
+// connectionOf is a client's connection ID.
+func (e *env) connectionOf(client *nwctest.Client) int64 {
+	e.t.Helper()
+	c, found := e.service.connections[client.ServicePub]
+	if !found {
+		e.t.Fatal("no such connection")
+	}
+	return c.id
+}
+
 func (e *env) edit(change func(*ledger.AppSettings)) {
 	e.t.Helper()
 	settings := ledger.DefaultApp()

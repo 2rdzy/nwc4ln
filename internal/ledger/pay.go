@@ -35,6 +35,9 @@ type PayRequest struct {
 // Pending is not a failure: the payment may still settle, the hold stays, and
 // the sweep finishes it. The end of ctx never stops the payment.
 func (l *Ledger) Pay(ctx context.Context, request PayRequest) (Transaction, error) {
+	if len(request.Invoice) > MaxInvoiceBytes {
+		return Transaction{}, ErrInvoiceTooLong
+	}
 	invoice := strings.ToLower(request.Invoice)
 	decoded, err := l.node.DecodeInvoice(ctx, invoice)
 	if err != nil {

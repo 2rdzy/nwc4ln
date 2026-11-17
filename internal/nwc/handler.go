@@ -265,6 +265,11 @@ func (s *Service) run(ctx context.Context, a *accepted) *nostr.Event {
 		return nil
 	}
 	event, err := s.seal(a, reply, scheme)
+	if errors.Is(err, errReplyTooLarge) {
+		// Say so, rather than leave the client to time out.
+		s.log.Warn("reply too large, sent an error instead", "event", a.event.ID, "method", methodName)
+		event, err = s.seal(a, failure(reply.ResultType, codeOther, "the reply is too large to send"), scheme)
+	}
 	if err != nil {
 		s.log.Error("cannot build response", "event", a.event.ID, "error", err)
 		return nil
@@ -402,11 +407,15 @@ func (s *Service) seal(a *accepted, reply *response, scheme string) (*nostr.Even
 	return s.sealTo(a.connection, reply, scheme, kindResponse, nostr.Tag{"e", a.event.ID})
 }
 
-// sealTo builds an event for one connection's client.
+// sealTo builds an event for one connection's client. The limit is NIP-44's, and
+// NIP-04 keeps to it too, so an event stays within what relays take.
 func (s *Service) sealTo(c connection, body any, scheme string, kind int, tags ...nostr.Tag) (*nostr.Event, error) {
 	plain, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
+	}
+	if len(plain) > maxPlain {
+		return nil, fmt.Errorf("%w: %d bytes", errReplyTooLarge, len(plain))
 	}
 	sealer, err := newCipher(scheme, c.clientPub, c.serviceKey)
 	if err != nil {

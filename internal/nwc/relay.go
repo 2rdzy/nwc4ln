@@ -279,7 +279,7 @@ func (s *Service) publishInfo(ctx context.Context) {
 	}
 }
 
-// infoEvent lists only what this connection may call, because a client will call
+// infoEvent lists only what this connection may call and be told about, because a client will call
 // whatever it finds here. A relay keeps one info event per key, and of two with the
 // same time it may keep either, so each is stamped later than the last.
 func (s *Service) infoEvent(c connection) (*nostr.Event, error) {
@@ -290,7 +290,7 @@ func (s *Service) infoEvent(c connection) (*nostr.Event, error) {
 		Content: strings.Join(s.methodNames(c.canPay, c.canInvoice), " "),
 		Tags: nostr.Tags{
 			{"encryption", s.encryptionTag()},
-			{"notifications", strings.Join(notificationTypes, " ")},
+			{"notifications", strings.Join(notificationNames(c.canPay), " ")},
 			{"extensions", strings.Join(extensions, " ")},
 		},
 	}

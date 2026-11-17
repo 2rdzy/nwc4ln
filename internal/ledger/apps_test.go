@@ -489,7 +489,7 @@ func TestAccessInTheLedger(t *testing.T) {
 		e := newEnv(t)
 		e.start()
 		e.settings(func(s *AppSettings) { s.CanInvoice = false })
-		if _, err := e.ledger.MakeInvoice(t.Context(), InvoiceRequest{AccountID: e.acct, AmountMsat: sat}); !errors.Is(err, ErrRestricted) {
+		if _, err := e.ledger.MakeInvoice(t.Context(), InvoiceRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), AmountMsat: sat}); !errors.Is(err, ErrRestricted) {
 			t.Fatalf("got %v", err)
 		}
 	})
@@ -509,7 +509,7 @@ func TestAccessInTheLedger(t *testing.T) {
 		}
 		e.now.Store(at.Unix())
 		refused(e, ErrAccountExpired)
-		if _, err := e.ledger.MakeInvoice(t.Context(), InvoiceRequest{AccountID: e.acct, AmountMsat: sat}); !errors.Is(err, ErrAccountExpired) {
+		if _, err := e.ledger.MakeInvoice(t.Context(), InvoiceRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), AmountMsat: sat}); !errors.Is(err, ErrAccountExpired) {
 			t.Fatalf("invoice: %v", err)
 		}
 		if err := e.node.Finish(pending.PaymentHash, true); err != nil {

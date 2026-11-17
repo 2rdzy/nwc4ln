@@ -14,8 +14,15 @@ const (
 	schemeNIP04 = "nip04"
 )
 
+// maxPlain is the most text NIP-44 can encrypt. Every reply and notification keeps
+// to it, on NIP-04 too. It is a variable only so that a test can lower it: rows
+// the ledger stores now always fit.
+var maxPlain = 65_535
+
 var (
 	errUnsupportedEncryption = errors.New("unsupported encryption")
+	// errReplyTooLarge marks a reply or notification over maxPlain.
+	errReplyTooLarge = errors.New("too large to send")
 	// errDecryptPanic marks content that made the library panic.
 	errDecryptPanic = errors.New("decryption panicked")
 )
