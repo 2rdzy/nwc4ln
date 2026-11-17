@@ -45,8 +45,19 @@ func TestDashboardMatchesLedger(t *testing.T) {
 	if row, err := money.Fund(ctx, wallet, 1_000*sat); err != nil || row.State != ledger.StateSettled {
 		t.Fatalf("fund: %+v, %v", row, err)
 	}
+	connection, err := db.DB.Exec(`INSERT INTO connections (account_id, client_pubkey, service_key, role, created_at)
+		VALUES (?, 'client', 'key', 'full', 0)`, wallet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectionID, err := connection.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
 	n.ScriptPay(fake.PayTimeout)
-	held, err := money.Pay(ctx, ledger.PayRequest{AccountID: wallet, Invoice: n.OutsideInvoice(100 * sat)})
+	held, err := money.Pay(ctx, ledger.PayRequest{
+		AccountID: wallet, ConnectionID: connectionID, Invoice: n.OutsideInvoice(100 * sat),
+	})
 	if err != nil || held.State != ledger.StatePending {
 		t.Fatalf("pay: %+v, %v", held, err)
 	}

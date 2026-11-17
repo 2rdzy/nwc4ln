@@ -1,8 +1,11 @@
 package ledger
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -19,6 +22,10 @@ type PayRequest struct {
 	AmountMsat int64
 	// RequestID is the requests row, or 0.
 	RequestID int64
+	// ConnectionID is the connection that sent the request. It must be a full
+	// connection of the account, not revoked, when the hold is stored: a connection
+	// replaced while the payment waits must not pay (S04). 0 is refused.
+	ConnectionID int64
 }
 
 // Pay pays an invoice and returns its transaction. An error means nothing was
@@ -172,6 +179,12 @@ func (l *Ledger) hold(
 	if !settings.CanPay {
 		return Transaction{}, ErrRestricted
 	}
+	// In the transaction that stores the hold. Write transactions take the lock when
+	// they begin, so a replace of the connection is either seen here or comes after
+	// the hold, which then finishes as any stored payment does.
+	if err := checkConnection(ctx, tx, request.ConnectionID, request.AccountID); err != nil {
+		return Transaction{}, err
+	}
 	// Read under holdLock, in the transaction that stores the hold, so a payment cannot
 	// pass while the switch turns. It covers payments to other accounts too: they move
 	// value between holders (owner, SR5).
@@ -220,6 +233,21 @@ func (l *Ledger) hold(
 		return Transaction{}, err
 	}
 	return row, l.commitHold(tx, row)
+}
+
+// checkConnection refuses a connection that is revoked, receive-only, or not the
+// account's. Only a full connection may pay.
+func checkConnection(ctx context.Context, db querier, connectionID, accountID int64) error {
+	var usable bool
+	err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM connections
+		WHERE id = ? AND account_id = ? AND role = 'full' AND revoked_at IS NULL)`, connectionID, accountID).Scan(&usable)
+	if err != nil {
+		return err
+	}
+	if !usable {
+		return ErrConnectionRevoked
+	}
+	return nil
 }
 
 // commitHold stores a hold. The attempt is recorded before the commit, so that a sweep
@@ -357,6 +385,9 @@ func (l *Ledger) apply(ctx context.Context, row Transaction, payment node.Paymen
 	default:
 		return
 	}
+	if errors.Is(err, errImpossibleReply) {
+		return // The alert has said it. The row stays pending, so a later pass asks again.
+	}
 	if err != nil {
 		l.log.Error("store payment result", "hash", row.PaymentHash, "error", err)
 		return
@@ -369,6 +400,15 @@ func (l *Ledger) apply(ctx context.Context, row Transaction, payment node.Paymen
 // but this means money left the node with no record of it: see the Late success
 // item in the project's list.
 func (l *Ledger) applySuccess(ctx context.Context, row Transaction, payment node.Payment) error {
+	// Before anything reads the amount: a reply that cannot be true is not applied.
+	// The row stays pending and keeps its hold, which is the safe side, and the admin
+	// is told. A later pass asks again.
+	if problem := impossible(row.PaymentHash, payment); problem != "" {
+		l.raise(ctx, l.db, AlertImpossibleReply, row.PaymentHash, fmt.Sprintf(
+			"The node reported %s as paid, but %s. The payment stays pending and its hold stays.",
+			row.PaymentHash, problem))
+		return errImpossibleReply
+	}
 	amount := row.AmountMsat
 	if payment.AmountMsat != 0 && payment.AmountMsat != amount {
 		l.raise(ctx, l.db, AlertAmountDiffers, row.PaymentHash, fmt.Sprintf(
@@ -400,6 +440,27 @@ func (l *Ledger) applySuccess(ctx context.Context, row Transaction, payment node
 			amount, row.PaymentHash))
 	}
 	return nil
+}
+
+// errImpossibleReply means a success from the node was not applied.
+var errImpossibleReply = errors.New("node reply cannot be true")
+
+// impossible says what is wrong with a success from the node, or "". The preimage
+// must hash to the payment hash: that is the proof the payee was paid. Amounts below
+// zero cannot be real.
+func impossible(hash string, payment node.Payment) string {
+	preimage, err := hex.DecodeString(payment.Preimage)
+	want, hashErr := hex.DecodeString(hash)
+	sum := sha256.Sum256(preimage)
+	switch {
+	case err != nil || hashErr != nil || !bytes.Equal(sum[:], want):
+		return "its preimage does not hash to the payment hash"
+	case payment.AmountMsat < 0:
+		return fmt.Sprintf("its amount is %d msat", payment.AmountMsat)
+	case payment.FeeMsat < 0:
+		return fmt.Sprintf("its fee is %d msat", payment.FeeMsat)
+	}
+	return ""
 }
 
 // trackPending asks the node about each pending payment. Reading the rows here,

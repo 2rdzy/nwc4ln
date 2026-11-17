@@ -19,15 +19,20 @@ var ErrSpendingPaused = errors.New("sub-wallet spending is paused by the operato
 // checked after it: none passes in the moment the switch turns. Receiving, pending
 // payments, apps, withdraw and the sweep of deleted sub-wallets are not affected.
 func (l *Ledger) SetSpendingPaused(ctx context.Context, paused bool) error {
-	var err error
-	if paused {
-		_, err = l.db.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, '1')
-			ON CONFLICT (key) DO NOTHING`, pausedKey)
-	} else {
-		_, err = l.db.ExecContext(ctx, `DELETE FROM settings WHERE key = ?`, pausedKey)
-	}
+	err := setPaused(ctx, l.db, paused)
 	if err == nil {
 		l.log.Warn("sub-wallet spending changed", "paused", paused)
+	}
+	return err
+}
+
+func setPaused(ctx context.Context, db executor, paused bool) error {
+	var err error
+	if paused {
+		_, err = db.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, '1')
+			ON CONFLICT (key) DO NOTHING`, pausedKey)
+	} else {
+		_, err = db.ExecContext(ctx, `DELETE FROM settings WHERE key = ?`, pausedKey)
 	}
 	return err
 }

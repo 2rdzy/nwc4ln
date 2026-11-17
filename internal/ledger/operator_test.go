@@ -64,7 +64,7 @@ func TestEachMoneyErrorRaisesAnAlert(t *testing.T) {
 				Invoice: invoice, AmountMsat: sat, FeeLimitMsat: minReserveMsat, Timeout: time.Second,
 			})
 		}
-		if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: invoice, AmountMsat: 900 * sat}); err != nil {
+		if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: invoice, AmountMsat: 900 * sat}); err != nil {
 			t.Fatal(err)
 		}
 		e.wantAlert(AlertAmountDiffers)
@@ -74,8 +74,9 @@ func TestEachMoneyErrorRaisesAnAlert(t *testing.T) {
 		e.start()
 		e.node.ScriptPay(fake.PayTimeout)
 		row := e.pay(e.node.OutsideInvoice(5 * sat))
+		paid := e.finished(row.PaymentHash) // For a preimage that fits the hash.
 		err := e.ledger.applySuccess(context.Background(), row, node.Payment{
-			State: node.PaymentSucceeded, AmountMsat: row.AmountMsat, FeeMsat: row.ReserveMsat + 1, Preimage: "00",
+			State: node.PaymentSucceeded, AmountMsat: row.AmountMsat, FeeMsat: row.ReserveMsat + 1, Preimage: paid.Preimage,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -94,7 +95,7 @@ func TestEachMoneyErrorRaisesAnAlert(t *testing.T) {
 		if err := e.node.Finish(row.PaymentHash, true); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: invoice}); !errors.Is(err, ErrAlreadyPaid) {
+		if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: invoice}); !errors.Is(err, ErrAlreadyPaid) {
 			t.Fatalf("retry: %v", err)
 		}
 		e.wantAlert(AlertPaidAfterFailed)
@@ -146,7 +147,7 @@ func TestCheckCleanLedger(t *testing.T) {
 	e.start()
 	wallet := e.addSubWallet()
 	e.fund(wallet, 1_000*sat)
-	if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: wallet, Invoice: e.node.OutsideInvoice(10 * sat)}); err != nil {
+	if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: wallet, ConnectionID: e.connection(wallet), Invoice: e.node.OutsideInvoice(10 * sat)}); err != nil {
 		t.Fatal(err)
 	}
 	failed := e.node.OutsideInvoice(10 * sat)
@@ -241,7 +242,7 @@ func TestNodeNotSynced(t *testing.T) {
 	e.node.SetSynced(false)
 	e.sweep()
 	before := e.rowCount()
-	if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: e.node.OutsideInvoice(5 * sat)}); !errors.Is(err, ErrNodeNotSynced) {
+	if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: e.node.OutsideInvoice(5 * sat)}); !errors.Is(err, ErrNodeNotSynced) {
 		t.Fatalf("payment out: %v", err)
 	}
 	if e.rowCount() != before {

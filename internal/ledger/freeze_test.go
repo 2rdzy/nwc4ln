@@ -34,7 +34,7 @@ func TestPauseStopsConcurrentPayments(t *testing.T) {
 					return
 				default:
 				}
-				_, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: wallet, Invoice: e.node.OutsideInvoice(sat)})
+				_, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: wallet, ConnectionID: e.connection(wallet), Invoice: e.node.OutsideInvoice(sat)})
 				if err != nil && !errors.Is(err, ErrSpendingPaused) {
 					t.Error(err)
 					return
@@ -63,7 +63,7 @@ func TestPauseCoversOnlySubWalletSpending(t *testing.T) {
 	e.fund(wallet, 1_000*sat)
 	e.setPaused(true)
 	pay := func(account int64, invoice string) error {
-		_, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: account, Invoice: invoice})
+		_, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: account, ConnectionID: e.connection(account), Invoice: invoice})
 		return err
 	}
 	if err := pay(wallet, e.node.OutsideInvoice(sat)); !errors.Is(err, ErrSpendingPaused) {
@@ -107,7 +107,7 @@ func TestPauseSurvivesRestart(t *testing.T) {
 	e.fund(wallet, 1_000*sat)
 	e.setPaused(true)
 	e.restart()
-	if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: wallet, Invoice: e.node.OutsideInvoice(sat)}); !errors.Is(err, ErrSpendingPaused) {
+	if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: wallet, ConnectionID: e.connection(wallet), Invoice: e.node.OutsideInvoice(sat)}); !errors.Is(err, ErrSpendingPaused) {
 		t.Fatalf("after restart: %v", err)
 	}
 }

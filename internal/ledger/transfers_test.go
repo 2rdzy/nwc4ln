@@ -64,7 +64,7 @@ func TestFundUpToTheMainWallet(t *testing.T) {
 	other, wallet := e.addSubWallet(), e.addSubWallet()
 	e.fund(other, 4_000*sat)
 	e.node.ScriptPay(fake.PayTimeout)
-	if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: other, Invoice: e.node.OutsideInvoice(1_000 * sat)}); err != nil {
+	if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: other, ConnectionID: e.connection(other), Invoice: e.node.OutsideInvoice(1_000 * sat)}); err != nil {
 		t.Fatal(err)
 	}
 	available := e.available()
@@ -146,7 +146,7 @@ func TestSettlementWaitsForFundCheck(t *testing.T) {
 	wallet, target := e.addSubWallet(), e.addSubWallet()
 	e.fund(wallet, 1_000*sat)
 	e.node.ScriptPay(fake.PayTimeout)
-	row, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: wallet, Invoice: e.node.OutsideInvoice(500 * sat)})
+	row, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: wallet, ConnectionID: e.connection(wallet), Invoice: e.node.OutsideInvoice(500 * sat)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestWithdrawUpToTheBalance(t *testing.T) {
 	wallet := e.addSubWallet()
 	e.fund(wallet, 1_000*sat)
 	e.node.ScriptPay(fake.PayTimeout)
-	if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: wallet, Invoice: e.node.OutsideInvoice(100 * sat)}); err != nil {
+	if _, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: wallet, ConnectionID: e.connection(wallet), Invoice: e.node.OutsideInvoice(100 * sat)}); err != nil {
 		t.Fatal(err)
 	}
 	free := e.balance(wallet)
@@ -477,7 +477,7 @@ func TestDeleteWithAPendingPayment(t *testing.T) {
 			e.fund(wallet, 1_000*sat)
 			e.node.SetRouteFee(fee)
 			e.node.ScriptPay(fake.PayTimeout)
-			row, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: wallet, Invoice: e.node.OutsideInvoice(100 * sat)})
+			row, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: wallet, ConnectionID: e.connection(wallet), Invoice: e.node.OutsideInvoice(100 * sat)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -619,7 +619,7 @@ func TestDeletedAccountsInvoiceIsClosed(t *testing.T) {
 }
 
 func (e *env) tryPayInvoice(invoice string) (Transaction, error) {
-	return e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, Invoice: invoice})
+	return e.ledger.Pay(context.Background(), PayRequest{AccountID: e.acct, ConnectionID: e.connection(e.acct), Invoice: invoice})
 }
 
 func (e *env) addLimitedApp(limit int64) int64 {
@@ -757,7 +757,7 @@ func TestEachPair(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				row, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: payer, Invoice: in.Invoice})
+				row, err := e.ledger.Pay(context.Background(), PayRequest{AccountID: payer, ConnectionID: e.connection(payer), Invoice: in.Invoice})
 				if err != nil || row.State != StateSettled {
 					t.Fatalf("pay %+v, %v", row, err)
 				}

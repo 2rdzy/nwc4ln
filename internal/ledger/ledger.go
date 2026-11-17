@@ -77,6 +77,9 @@ var (
 	ErrUnknownAccount = errors.New("unknown account")
 	ErrAccountDeleted = errors.New("account is deleted")
 	ErrAccountExpired = errors.New("account has expired")
+	// ErrConnectionRevoked means the connection that asked may no longer pay: it was
+	// revoked or replaced, or it is not a full connection of the account.
+	ErrConnectionRevoked = errors.New("connection is revoked")
 	// ErrRestricted means the account's settings do not allow this.
 	ErrRestricted = errors.New("not allowed for this account")
 	// ErrQuotaExceeded means amount plus reserve does not fit in the remaining limit.
