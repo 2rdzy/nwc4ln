@@ -204,6 +204,8 @@ func (s *Service) refused(command string, err error) *Error {
 		message = "sub-wallet spending is paused by the operator"
 	case errors.Is(err, ledger.ErrNodeNotSynced):
 		message = "the node is catching up with the chain, try again later"
+	case errors.Is(err, ledger.ErrSyncUnknown):
+		message = "cannot read the node's sync state, try again later"
 	case errors.Is(err, ledger.ErrBadExpiry):
 		message = "expiry must be from 60 seconds to 7 days"
 	case errors.Is(err, ledger.ErrDescriptionTooLong):

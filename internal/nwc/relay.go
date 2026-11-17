@@ -16,6 +16,10 @@ func (s *Service) Run(ctx context.Context) {
 	defer s.work.Wait()
 	s.work.Go(func() { s.notifyLoop(ctx) })
 	s.work.Go(func() { s.maintain(ctx) })
+	s.work.Go(func() { s.infoLoop(ctx) })
+	for range publishers {
+		s.work.Go(func() { s.publishLoop(ctx) })
+	}
 	if len(s.connectionList()) == 0 {
 		s.log.Warn("no connections to serve yet")
 		select {
@@ -50,9 +54,7 @@ func (s *Service) serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	relay, err := nostr.RelayConnect(ctx, s.relay, nostr.WithNoticeHandler(func(notice string) {
-		s.log.Info("relay notice", "notice", notice)
-	}))
+	relay, err := nostr.RelayConnect(ctx, s.relay, nostr.WithNoticeHandler(s.notice))
 	if err != nil {
 		return err
 	}
@@ -81,7 +83,7 @@ func (s *Service) serve(ctx context.Context) error {
 		}
 	}()
 	s.setRelay(relay)
-	s.publishInfo(ctx)
+	s.requestInfo()
 	s.log.Info("listening on relay", "relay", s.relay, "connections", len(s.connectionList()))
 	for {
 		select {
@@ -103,7 +105,7 @@ func (s *Service) serve(ctx context.Context) error {
 			old, oldEvents = subscription, subscription.Events
 			subscription, ready = next, next.EndOfStoredEvents
 			retire = time.After(overlapLimit) // In case the relay never confirms it.
-			s.publishInfo(ctx)
+			s.requestInfo()
 		case <-ready:
 			ready = nil
 			retire = time.After(overlapAfterReady)
@@ -140,22 +142,85 @@ func (s *Service) filter(since nostr.Timestamp) nostr.Filter {
 	return nostr.Filter{Kinds: []int{kindRequest}, Tags: nostr.TagMap{"p": keys}, Since: &since}
 }
 
+// notice logs what the relay says, at a bounded rate.
+func (s *Service) notice(notice string) {
+	if ok, skipped := s.notices.allow(s.now()); ok {
+		s.log.Info("relay notice", "notice", notice, "skipped", skipped)
+	}
+}
+
 // receive stores a request in order, then runs it apart from the others, because
-// a payment can take a minute.
+// a payment can take a minute. Nothing here waits for the relay, which this loop
+// reads: what waits on the relay piles up in the library.
 func (s *Service) receive(ctx context.Context, event *nostr.Event) {
 	request := s.accept(ctx, event)
 	if request == nil {
 		return
 	}
+	done := s.releaseReply
+	if request.reserved {
+		done = func() { s.release(request.connection.id) }
+	} else if !s.takeReply() {
+		s.log.Debug("request dropped: too many refusals at once", "event", event.ID)
+		return
+	}
 	s.work.Go(func() {
-		reply := s.run(ctx, request)
-		if reply == nil {
-			return
-		}
-		if err := s.send(ctx, *reply); err != nil {
-			s.log.Error("response lost", "event", event.ID, "error", err)
+		defer done()
+		if reply := s.run(ctx, request); reply != nil {
+			s.queue(*reply, event.ID)
 		}
 	})
+}
+
+// outgoing is a reply waiting to be published.
+type outgoing struct {
+	event   nostr.Event
+	request string // The request's event ID, for the log.
+}
+
+// queue hands a reply to the publishers. It never waits.
+func (s *Service) queue(event nostr.Event, request string) {
+	select {
+	case s.outbox <- outgoing{event: event, request: request}:
+	default:
+		if ok, skipped := s.dropped.allow(s.now()); ok {
+			s.log.Warn("response dropped: too many waiting for the relay", "event", request, "skipped", skipped)
+		}
+	}
+}
+
+func (s *Service) publishLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case item := <-s.outbox:
+			if err := s.send(ctx, item.event); err != nil {
+				s.log.Error("response lost", "event", item.request, "error", err)
+			}
+		}
+	}
+}
+
+// requestInfo asks the info loop to publish the info events, and never waits.
+func (s *Service) requestInfo() {
+	select {
+	case s.infoNeeded <- struct{}{}:
+	default: // One is pending already, and it reads the connections afresh.
+	}
+}
+
+// infoLoop publishes the info events when asked, apart from the relay loop, because
+// each publish can wait publishWithin for the relay.
+func (s *Service) infoLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.infoNeeded:
+			s.publishInfo(ctx)
+		}
+	}
 }
 
 // send publishes a response, and keeps trying through a short relay outage. A

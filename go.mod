@@ -4,6 +4,7 @@ go 1.26.11
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/coder/websocket v1.8.12
 	github.com/getAlby/go-nostr v0.0.0-20261110062342-5d9af3cfa9c8
 	github.com/lightningnetwork/lnd v0.21.6-beta
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
@@ -45,7 +46,6 @@ require (
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.5 // indirect
-	github.com/coder/websocket v1.8.12 // indirect
 	github.com/containerd/continuity v0.3.0 // indirect
 	github.com/coreos/go-semver v0.3.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.3.2 // indirect

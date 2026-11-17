@@ -72,6 +72,37 @@ const (
 	// are dropped, because they are best effort and the ledger must never wait.
 	notifyQueue = 64
 
+	// Replies wait in a queue of publishQueue for one of publishers, so that a relay
+	// that acknowledges nothing holds up the queue, never the requests. Past that a
+	// reply is dropped: the client can use lookup_invoice.
+	publishQueue = 256
+	publishers   = 4
+
+	// maxRunning requests run at once, and at most maxRunningEach per connection, so
+	// that one holder's slow payments cannot take every place: rateBurst is 50 and a
+	// payment can wait payWait. A wallet sends three or four at once when it connects.
+	// A request past either counts as over the rate.
+	maxRunning     = 64
+	maxRunningEach = 8
+
+	// RATE_LIMITED and UNAUTHORIZED replies have their own budget: replyBudget at
+	// once, and replyRate a second. Past that the event is dropped before it is
+	// decrypted, so a flood costs no keys, encryption or signatures.
+	replyBudget = 8
+	replyRate   = 10
+
+	// Limits on a request, checked before any hash. An NWC request with a long invoice
+	// is about 10 KB. Larger events are dropped, at debug level like any other.
+	maxContent  = 64 << 10
+	maxTags     = 16
+	maxTagItems = 8
+	maxTagItem  = 1 << 10
+
+	// Relay notices are logged at most noticeBurst at once, then one every
+	// noticeEvery, because a relay can send any number.
+	noticeBurst = 5
+	noticeEvery = 10 * time.Second
+
 	// A connection may send rateBurst requests at once, and rateRefill per second
 	// after that. A person's wallet stays far below this.
 	rateBurst  = 50
@@ -145,10 +176,28 @@ type Service struct {
 	// which is enough: the loop reads the map afresh.
 	changed chan struct{}
 	// lastInfo is when each connection's info event was last stamped, by connection
-	// ID. Only the relay loop uses it.
+	// ID. Only the info loop uses it.
 	lastInfo map[int64]int64
 
 	notifications chan ledger.Transaction
+
+	// outbox holds replies until a publisher sends them. infoNeeded asks the info loop
+	// to publish every info event; it holds one signal, like changed.
+	outbox     chan outgoing
+	infoNeeded chan struct{}
+
+	// running counts the requests that run now, in all and per connection ID.
+	runningMu      sync.Mutex
+	running        int
+	runningBy      map[int64]int
+	maxRunning     int // The constants of the same names. Changed only by tests.
+	maxRunningEach int
+
+	// replySlots and replyLimiter are the budget of RATE_LIMITED and UNAUTHORIZED replies.
+	replySlots   chan struct{}
+	replyLimiter *rate.Limiter
+
+	notices, dropped *quiet // Relay notices, and replies dropped on a full outbox.
 
 	limitersMu      sync.Mutex
 	limiters        map[int64]*rate.Limiter // By connection ID. Lost at a restart, which is fine.
@@ -179,6 +228,15 @@ func New(
 		changed:         make(chan struct{}, 1),
 		lastInfo:        map[int64]int64{},
 		notifications:   make(chan ledger.Transaction, notifyQueue),
+		outbox:          make(chan outgoing, publishQueue),
+		infoNeeded:      make(chan struct{}, 1),
+		runningBy:       map[int64]int{},
+		maxRunning:      maxRunning,
+		maxRunningEach:  maxRunningEach,
+		replySlots:      make(chan struct{}, replyBudget),
+		replyLimiter:    rate.NewLimiter(replyRate, replyRate),
+		notices:         newQuiet(noticeEvery, noticeBurst),
+		dropped:         newQuiet(noticeEvery, noticeBurst),
 	}
 	s.publish = s.publishToRelay
 	s.methods = map[string]method{
@@ -325,6 +383,70 @@ func (s *Service) allowed(connectionID int64) bool {
 	}
 	s.limitersMu.Unlock()
 	return limiter.AllowN(s.now(), 1)
+}
+
+// reserve takes a place for one running request of a connection, and reports
+// whether there was one. Each place taken is given back by release.
+func (s *Service) reserve(connectionID int64) bool {
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
+	if s.running >= s.maxRunning || s.runningBy[connectionID] >= s.maxRunningEach {
+		return false
+	}
+	s.running++
+	s.runningBy[connectionID]++
+	return true
+}
+
+func (s *Service) release(connectionID int64) {
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
+	s.running--
+	if s.runningBy[connectionID]--; s.runningBy[connectionID] <= 0 {
+		delete(s.runningBy, connectionID)
+	}
+}
+
+// takeReply takes a place in the budget of refusal replies, and reports whether
+// there was one. Each place taken is given back by releaseReply.
+func (s *Service) takeReply() bool {
+	select {
+	case s.replySlots <- struct{}{}:
+	default:
+		return false
+	}
+	if !s.replyLimiter.AllowN(s.now(), 1) {
+		<-s.replySlots
+		return false
+	}
+	return true
+}
+
+func (s *Service) releaseReply() { <-s.replySlots }
+
+// quiet limits how often one kind of message is logged, and counts the rest, so
+// that the next line logged can say how many were left out.
+type quiet struct {
+	mu      sync.Mutex
+	limiter *rate.Limiter
+	skipped int
+}
+
+func newQuiet(every time.Duration, burst int) *quiet {
+	return &quiet{limiter: rate.NewLimiter(rate.Every(every), burst)}
+}
+
+// allow reports whether to log now, and how many were left out before this one.
+func (q *quiet) allow(now time.Time) (bool, int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if !q.limiter.AllowN(now, 1) {
+		q.skipped++
+		return false, 0
+	}
+	skipped := q.skipped
+	q.skipped = 0
+	return true, skipped
 }
 
 // take spends one event from a connection's limiter in limiters, made on first use

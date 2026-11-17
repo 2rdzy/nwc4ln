@@ -71,6 +71,9 @@ type accepted struct {
 	// refused is the reply for a connection that may no longer be used: revoked,
 	// deleted or expired. Like a limited request, it has no row and does no work.
 	refused *Error
+	// reserved means the request holds a place among the running ones (reserve).
+	// Every stored request has one; a limited or refused one does not.
+	reserved bool
 }
 
 // accept decides whether an event is a new request for one of our connections,
@@ -80,21 +83,26 @@ func (s *Service) accept(ctx context.Context, event *nostr.Event) *accepted {
 	if event.Kind != kindRequest {
 		return nil
 	}
+	// Anyone can send these, because service keys are public, so they are logged at
+	// debug level only: a stranger must not be able to fill the log. The cheap checks
+	// come first: the size before any hash, and the key lookup before the signature.
+	if oversize(event) {
+		s.log.Debug("request dropped: too large", "event", event.ID)
+		return nil
+	}
+	c, found := s.findConnection(event)
+	if !found {
+		s.log.Debug("request dropped: no connection for this key", "event", event.ID)
+		return nil
+	}
 	// The signature covers the event's content, not its id field. Without the ID
 	// check, a repeat under a new id would pass the unique index below.
-	// Anyone can send these, because service keys are public, so they are logged at
-	// debug level only: a stranger must not be able to fill the log.
 	if !event.CheckID() {
 		s.log.Debug("request dropped: id does not match the event")
 		return nil
 	}
 	if valid, err := event.CheckSignature(); err != nil || !valid {
 		s.log.Debug("request dropped: bad signature", "event", event.ID)
-		return nil
-	}
-	c, found := s.findConnection(event)
-	if !found {
-		s.log.Debug("request dropped: no connection for this key", "event", event.ID)
 		return nil
 	}
 	if expired(event, s.now()) {
@@ -123,19 +131,42 @@ func (s *Service) accept(ctx context.Context, event *nostr.Event) *accepted {
 	// Before the store, because that is a synced write on the one relay goroutine. A
 	// refused request has no row, so a later repeat could run. R9 stops a second
 	// payment, and an invoice settles only once.
-	if !s.allowed(c.id) {
+	// The place is taken before the row is stored: a stored request that never ran
+	// would stay received for good, and is never run again.
+	if !s.allowed(c.id) || !s.reserve(c.id) {
 		return &accepted{event: event, connection: c, limited: true}
 	}
 	rowID, err := s.store(ctx, event, c)
 	if err != nil {
+		s.release(c.id)
 		s.log.Error("request dropped: cannot store it", "event", event.ID, "error", err)
 		return nil
 	}
 	if rowID == 0 {
+		s.release(c.id)
 		s.log.Info("request dropped: seen before", "event", event.ID)
 		return nil
 	}
-	return &accepted{event: event, connection: c, rowID: rowID}
+	return &accepted{event: event, connection: c, rowID: rowID, reserved: true}
+}
+
+// oversize reports an event larger than any request: see maxContent and the tag
+// limits. It reads only lengths, so it costs nothing for a large event.
+func oversize(event *nostr.Event) bool {
+	if len(event.Content) > maxContent || len(event.Tags) > maxTags {
+		return true
+	}
+	for _, tag := range event.Tags {
+		if len(tag) > maxTagItems {
+			return true
+		}
+		for _, item := range tag {
+			if len(item) > maxTagItem {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // seen reports whether a request is stored. It only reads, through the unique index.

@@ -41,6 +41,8 @@ type Ledger interface {
 	CloseAlert(ctx context.Context, id int64) error
 	// NodeSynced is the node's last answer about the chain. It reads no node.
 	NodeSynced() bool
+	// NodeSyncUnknown is true when that answer is too old to rely on.
+	NodeSyncUnknown() bool
 	// SpendingPaused and SetSpendingPaused read and turn the freeze switch (R14).
 	SpendingPaused(ctx context.Context) (bool, error)
 	SetSpendingPaused(ctx context.Context, paused bool) error

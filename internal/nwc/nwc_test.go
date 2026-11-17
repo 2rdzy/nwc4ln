@@ -134,6 +134,9 @@ func (e *env) handle(event *nostr.Event) *nostr.Event {
 	if request == nil {
 		return nil
 	}
+	if request.reserved {
+		defer e.service.release(request.connection.id)
+	}
 	return e.service.run(e.t.Context(), request)
 }
 

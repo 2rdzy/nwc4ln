@@ -153,7 +153,7 @@ func TestSettleCannotPassNodeRead(t *testing.T) {
 		done := make(chan struct{})
 		settle.Go(func() {
 			defer close(done)
-			if err := e.ledger.trackPending(context.Background()); err != nil {
+			if err := e.ledger.trackPending(context.Background(), 0); err != nil {
 				t.Error(err)
 			}
 		})
@@ -378,6 +378,7 @@ func TestLimitResets(t *testing.T) {
 			e.settings(func(s *AppSettings) { s.LimitMsat = limit(110 * sat); s.Renewal = renewal })
 			end := periodEnd(renewal, boundary.Add(-time.Second))
 			e.now.Store(end.Unix() - 1)
+			e.readSync() // The jump is longer than the sync state is believed.
 			e.node.ScriptPay(fake.PayTimeout)
 			pending, err := e.tryPay(100 * sat)
 			if err != nil {
@@ -415,6 +416,7 @@ func TestLimitResets(t *testing.T) {
 			t.Fatal(err)
 		}
 		e.advance(10 * 365 * 24 * time.Hour)
+		e.readSync()
 		if _, err := e.tryPay(100 * sat); !errors.Is(err, ErrQuotaExceeded) {
 			t.Fatalf("a one-time limit came back: %v", err)
 		}

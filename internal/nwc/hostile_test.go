@@ -1,6 +1,7 @@
 package nwc
 
 import (
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -178,6 +179,16 @@ func TestPayWhileNodeNotSynced(t *testing.T) {
 	wantCode(t, response, codeOther)
 	if response.Error.Message != "the node is catching up with the chain, try again later" {
 		t.Fatalf("message %q", response.Error.Message)
+	}
+}
+
+// Catches: a client told INTERNAL, or a payment failure, while the node's sync state
+// cannot be read and payments out are refused (R18).
+func TestPayWhileSyncUnknown(t *testing.T) {
+	e := newEnv(t)
+	got := e.service.refused("pay_invoice", fmt.Errorf("hold: %w", ledger.ErrSyncUnknown))
+	if got.Code != codeOther || got.Message != "cannot read the node's sync state, try again later" {
+		t.Fatalf("got %+v", got)
 	}
 }
 
