@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/ledger"
-	"github.com/2rdzy/nwc4ln/internal/nwc"
-	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
-	"github.com/2rdzy/nwc4ln/internal/store"
-	"github.com/2rdzy/nwc4ln/test/integration"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc/nwctest"
+	"github.com/2rdzy/nwc4ln/wallet/internal/store"
+	"github.com/2rdzy/nwc4ln/wallet/test/integration"
 )
 
 // routedInvoice makes an invoice on lnd-c, one hop past lnd-b, so paying it from

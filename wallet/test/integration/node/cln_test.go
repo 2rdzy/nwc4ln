@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/node"
-	"github.com/2rdzy/nwc4ln/internal/node/cln"
-	"github.com/2rdzy/nwc4ln/internal/node/nodetest"
-	"github.com/2rdzy/nwc4ln/test/integration"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/cln"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/nodetest"
+	"github.com/2rdzy/nwc4ln/wallet/test/integration"
 )
 
 const selfCLN = integration.NodeCLNA

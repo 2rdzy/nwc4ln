@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/2rdzy/nwc4ln/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
 )
 
 // replacingNode replaces the connection once, inside the node call named by at. It

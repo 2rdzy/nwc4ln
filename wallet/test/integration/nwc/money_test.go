@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
-	"github.com/2rdzy/nwc4ln/test/integration"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc/nwctest"
+	"github.com/2rdzy/nwc4ln/wallet/test/integration"
 )
 
 const other = integration.NodeLNDB

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/node"
-	"github.com/2rdzy/nwc4ln/internal/node/fake"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/fake"
 )
 
 // addSubWallet makes a sub-wallet the way the service does: every command on, no limit.

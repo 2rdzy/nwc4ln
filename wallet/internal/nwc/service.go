@@ -24,9 +24,9 @@ import (
 	"github.com/getAlby/go-nostr"
 	"golang.org/x/time/rate"
 
-	"github.com/2rdzy/nwc4ln/internal/ledger"
-	"github.com/2rdzy/nwc4ln/internal/node"
-	"github.com/2rdzy/nwc4ln/internal/store"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/store"
 )
 
 // Event kinds from NIP-47.

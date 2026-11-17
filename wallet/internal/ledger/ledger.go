@@ -25,8 +25,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/node"
-	"github.com/2rdzy/nwc4ln/internal/store"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/store"
 )
 
 const (

@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/ledger"
-	"github.com/2rdzy/nwc4ln/internal/node"
-	"github.com/2rdzy/nwc4ln/internal/node/fake"
-	"github.com/2rdzy/nwc4ln/internal/nwc"
-	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
-	"github.com/2rdzy/nwc4ln/internal/store"
-	"github.com/2rdzy/nwc4ln/test/integration"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/fake"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc/nwctest"
+	"github.com/2rdzy/nwc4ln/wallet/internal/store"
+	"github.com/2rdzy/nwc4ln/wallet/test/integration"
 )
 
 // setLimit gives an app a limit, using the same Go function the UI will use. There

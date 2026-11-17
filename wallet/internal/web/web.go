@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
 )
 
 //go:embed templates/*.html

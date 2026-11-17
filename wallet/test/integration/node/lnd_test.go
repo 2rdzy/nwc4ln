@@ -21,10 +21,10 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/2rdzy/nwc4ln/internal/node"
-	"github.com/2rdzy/nwc4ln/internal/node/lnd"
-	"github.com/2rdzy/nwc4ln/internal/node/nodetest"
-	"github.com/2rdzy/nwc4ln/test/integration"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/lnd"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/nodetest"
+	"github.com/2rdzy/nwc4ln/wallet/test/integration"
 )
 
 const (

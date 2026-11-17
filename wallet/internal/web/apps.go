@@ -12,7 +12,7 @@ import (
 
 	"github.com/skip2/go-qrcode"
 
-	"github.com/2rdzy/nwc4ln/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
 )
 
 // AppService changes apps. The running NWC service does it, so that its relay loop

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/2rdzy/nwc4ln/internal/ledger"
-	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc/nwctest"
 )
 
 func (e *env) addSubWallet(name string) *nwctest.Client {

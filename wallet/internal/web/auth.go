@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/nwc"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc"
 )
 
 const (

@@ -1,4 +1,4 @@
-module github.com/2rdzy/nwc4ln
+module github.com/2rdzy/nwc4ln/wallet
 
 go 1.26.11
 

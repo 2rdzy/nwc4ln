@@ -17,11 +17,11 @@ import (
 
 	"github.com/skip2/go-qrcode"
 
-	"github.com/2rdzy/nwc4ln/internal/ledger"
-	"github.com/2rdzy/nwc4ln/internal/node"
-	"github.com/2rdzy/nwc4ln/internal/node/fake"
-	"github.com/2rdzy/nwc4ln/internal/nwc"
-	"github.com/2rdzy/nwc4ln/internal/store"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/fake"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc"
+	"github.com/2rdzy/nwc4ln/wallet/internal/store"
 )
 
 // appsEnv is the UI on a real database, ledger and NWC service, with a fake node.

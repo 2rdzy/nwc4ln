@@ -45,13 +45,25 @@ func Default(dataDir string) Config {
 	return Config{DataDir: dataDir, Listen: "127.0.0.1:8080"}
 }
 
-// DefaultPath returns the config path used when none is given.
+// DefaultPath returns the config path used when none is given. It refuses to
+// return it while only the folder of an older version exists, ~/.nwc4ln: init
+// would otherwise start an empty ledger beside the old one, and start would fail
+// without saying why. The folder is moved by hand, not by this code.
 func DefaultPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("find home folder: %w", err)
 	}
-	return filepath.Join(home, ".nwc4ln", "nwc4ln.toml"), nil
+	dir := filepath.Join(home, ".nwc4ln-wallet")
+	old := filepath.Join(home, ".nwc4ln")
+	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Lstat(old); err == nil {
+			return "", fmt.Errorf("found the old data folder %s and no %s: stop the service, run "+
+				"mv %s %s, rename nwc4ln.toml in it to nwc4ln-wallet.toml, and change data_dir and any "+
+				"other paths in that file to the new folder", old, dir, old, dir)
+		}
+	}
+	return filepath.Join(dir, "nwc4ln-wallet.toml"), nil
 }
 
 // Load reads and checks the config file. Unknown keys are errors, so that a

@@ -3,7 +3,7 @@ package ledger
 import (
 	"testing"
 
-	"github.com/2rdzy/nwc4ln/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
 )
 
 // Catches: an amount that is 0 or below, above all bitcoin, or other than the

@@ -20,11 +20,11 @@ import (
 
 	"github.com/getAlby/go-nostr"
 
-	"github.com/2rdzy/nwc4ln/internal/ledger"
-	"github.com/2rdzy/nwc4ln/internal/node"
-	"github.com/2rdzy/nwc4ln/internal/node/fake"
-	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
-	"github.com/2rdzy/nwc4ln/internal/store"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/fake"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc/nwctest"
+	"github.com/2rdzy/nwc4ln/wallet/internal/store"
 )
 
 const relayURL = "ws://127.0.0.1:1"

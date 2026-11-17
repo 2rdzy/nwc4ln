@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/2rdzy/nwc4ln/internal/ledger"
-	"github.com/2rdzy/nwc4ln/internal/node"
-	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc/nwctest"
 )
 
 // callWith sends a request in one encryption, and returns the reply with the size

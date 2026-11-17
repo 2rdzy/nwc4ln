@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
 )
 
 // Harness connects the tests to a node and to someone outside it.

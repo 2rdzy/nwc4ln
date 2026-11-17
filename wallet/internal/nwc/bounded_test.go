@@ -15,7 +15,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/getAlby/go-nostr"
 
-	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc/nwctest"
 )
 
 // floodRelay is a test relay that answers the first REQ with the given events, then

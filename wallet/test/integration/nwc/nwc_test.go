@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/config"
-	"github.com/2rdzy/nwc4ln/internal/ledger"
-	"github.com/2rdzy/nwc4ln/internal/nwc"
-	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
-	"github.com/2rdzy/nwc4ln/internal/store"
-	"github.com/2rdzy/nwc4ln/test/integration"
+	"github.com/2rdzy/nwc4ln/wallet/internal/config"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc/nwctest"
+	"github.com/2rdzy/nwc4ln/wallet/internal/store"
+	"github.com/2rdzy/nwc4ln/wallet/test/integration"
 )
 
 // self is the node nwc4ln runs on: see integration.SelfNode.
@@ -49,11 +49,11 @@ func startService(t *testing.T, n *integration.Network) *service {
 	t.Helper()
 	ctx := t.Context()
 	dir := filepath.Join(t.TempDir(), "data")
-	binary := filepath.Join(filepath.Dir(dir), "nwc4ln")
-	if out, err := exec.CommandContext(ctx, "go", "build", "-o", binary, "../../../cmd/nwc4ln").CombinedOutput(); err != nil {
+	binary := filepath.Join(filepath.Dir(dir), "nwc4ln-wallet")
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o", binary, "../../../cmd/nwc4ln-wallet").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v: %s", err, out)
 	}
-	path := filepath.Join(dir, "nwc4ln.toml")
+	path := filepath.Join(dir, "nwc4ln-wallet.toml")
 	adminSecret, adminKey := nwctest.NewKey()
 	adminNpub, err := nwc.EncodeNpub(adminKey)
 	if err != nil {
@@ -75,7 +75,7 @@ func startService(t *testing.T, n *integration.Network) *service {
 	s := &service{t: t, dir: dir, binary: binary, config: path, relay: cfg.Relay, adminSecret: adminSecret}
 	s.connectionString = s.addApp("first")
 	s.second = s.addApp("second")
-	logFile, err := os.Create(filepath.Join(filepath.Dir(dir), "nwc4ln.log"))
+	logFile, err := os.Create(filepath.Join(filepath.Dir(dir), "nwc4ln-wallet.log"))
 	if err != nil {
 		t.Fatal(err)
 	}

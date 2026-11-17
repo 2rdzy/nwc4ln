@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/2rdzy/nwc4ln/internal/node"
-	"github.com/2rdzy/nwc4ln/internal/node/fake"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/fake"
 )
 
 // gatedInvoices holds every MakeInvoice at the node until released, so that many

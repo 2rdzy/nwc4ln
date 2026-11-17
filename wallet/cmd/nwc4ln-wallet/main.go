@@ -1,4 +1,4 @@
-// Command nwc4ln offers Nostr Wallet Connect on top of a Lightning node.
+// Command nwc4ln-wallet offers Nostr Wallet Connect on top of a Lightning node.
 package main
 
 import (
@@ -15,22 +15,22 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/config"
-	"github.com/2rdzy/nwc4ln/internal/ledger"
-	"github.com/2rdzy/nwc4ln/internal/node"
-	"github.com/2rdzy/nwc4ln/internal/node/cln"
-	"github.com/2rdzy/nwc4ln/internal/node/lnd"
-	"github.com/2rdzy/nwc4ln/internal/nwc"
-	"github.com/2rdzy/nwc4ln/internal/store"
-	"github.com/2rdzy/nwc4ln/internal/web"
+	"github.com/2rdzy/nwc4ln/wallet/internal/config"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/cln"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/lnd"
+	"github.com/2rdzy/nwc4ln/wallet/internal/nwc"
+	"github.com/2rdzy/nwc4ln/wallet/internal/store"
+	"github.com/2rdzy/nwc4ln/wallet/internal/web"
 )
 
 const (
 	databaseName = "nwc4ln.db"
 	dataDirMode  = 0o700
-	usage        = "usage: nwc4ln init [--admin npub] [--config path], nwc4ln start [--config path], " +
-		"nwc4ln backup [--config path] <file>, nwc4ln check [--all] [--config path], " +
-		"or nwc4ln set-admin [--config path] <npub>"
+	usage        = "usage: nwc4ln-wallet init [--admin npub] [--config path], nwc4ln-wallet start [--config path], " +
+		"nwc4ln-wallet backup [--config path] <file>, nwc4ln-wallet check [--all] [--config path], " +
+		"or nwc4ln-wallet set-admin [--config path] <npub>"
 )
 
 func main() {
@@ -38,7 +38,7 @@ func main() {
 	err := run(ctx, os.Args[1:], os.Stdout)
 	stop()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "nwc4ln:", err)
+		fmt.Fprintln(os.Stderr, "nwc4ln-wallet:", err)
 		os.Exit(1)
 	}
 }
@@ -50,7 +50,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	command, rest := args[0], args[1:]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(out)
-	configPath := flags.String("config", "", "config file (default ~/.nwc4ln/nwc4ln.toml)")
+	configPath := flags.String("config", "", "config file (default ~/.nwc4ln-wallet/nwc4ln-wallet.toml)")
 	admin := flags.String("admin", "", "the admin's npub (init)")
 	all := flags.Bool("all", false, "check every row, not only the last 7 days (check)")
 	if err := flags.Parse(rest); err != nil {
@@ -132,7 +132,7 @@ func runInit(ctx context.Context, configPath, adminNpub string, out io.Writer) e
 	}
 	fmt.Fprintln(out, "created", configPath)
 	if adminKey == "" {
-		fmt.Fprintln(out, "no admin key is set: run nwc4ln set-admin <npub> before you log in")
+		fmt.Fprintln(out, "no admin key is set: run nwc4ln-wallet set-admin <npub> before you log in")
 	}
 	return nil
 }
@@ -244,7 +244,7 @@ func runStart(ctx context.Context, configPath string, out io.Writer) (err error)
 	}()
 	slog.Info("admin UI listening", "url", "http://"+listener.Addr().String())
 	if adminKey == "" {
-		slog.Warn("no admin key is set, so nobody can log in: stop the service and run nwc4ln set-admin <npub>")
+		slog.Warn("no admin key is set, so nobody can log in: stop the service and run nwc4ln-wallet set-admin <npub>")
 	}
 	fmt.Fprintln(out, "started")
 	defer money.Close()

@@ -10,7 +10,7 @@ import (
 
 func writeFile(t *testing.T, content string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "nwc4ln.toml")
+	path := filepath.Join(t.TempDir(), "nwc4ln-wallet.toml")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestLoadRefusesMissingFile(t *testing.T) {
 
 // A failure here means a value does not survive the trip to disk and back.
 func TestWriteThenLoad(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nwc4ln.toml")
+	path := filepath.Join(t.TempDir(), "nwc4ln-wallet.toml")
 	want := Default("/data/with \"quotes\"")
 	want.Relay = "ws://127.0.0.1:1"
 	want.AllowedHosts = []string{"nwc.example"}
@@ -110,5 +110,41 @@ func TestNodeTypeDefaultsToLND(t *testing.T) {
 	}
 	if cfg.NodeType() != NodeLND {
 		t.Fatalf("node type %q, want %q", cfg.NodeType(), NodeLND)
+	}
+}
+
+// A failure here means a wallet installed before the rename silently starts an
+// empty ledger beside the old one, or reads the old folder.
+func TestDefaultPathRefusesOldFolder(t *testing.T) {
+	tests := []struct {
+		name    string
+		folders []string
+		wantErr bool
+	}{
+		{"fresh home", nil, false},
+		{"only the old folder", []string{".nwc4ln"}, true},
+		{"only the new folder", []string{".nwc4ln-wallet"}, false},
+		{"both folders", []string{".nwc4ln", ".nwc4ln-wallet"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			for _, folder := range tt.folders {
+				if err := os.Mkdir(filepath.Join(home, folder), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			path, err := DefaultPath()
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "mv "+filepath.Join(home, ".nwc4ln")+" ") {
+					t.Fatalf("got %q, %v; want an error naming the mv command", path, err)
+				}
+				return
+			}
+			if want := filepath.Join(home, ".nwc4ln-wallet", "nwc4ln-wallet.toml"); err != nil || path != want {
+				t.Fatalf("got %q, %v; want %q", path, err, want)
+			}
+		})
 	}
 }

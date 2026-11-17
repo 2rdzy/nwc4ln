@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/2rdzy/nwc4ln/internal/ledger"
+	"github.com/2rdzy/nwc4ln/wallet/internal/ledger"
 )
 
 // SubWalletService changes sub-wallets. The running NWC service does it, so that its

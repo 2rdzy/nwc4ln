@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/2rdzy/nwc4ln/internal/node"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node"
 )
 
 // Renewal periods of a limit.

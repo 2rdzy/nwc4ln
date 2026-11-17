@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/2rdzy/nwc4ln/internal/node/fake"
-	"github.com/2rdzy/nwc4ln/internal/store"
+	"github.com/2rdzy/nwc4ln/wallet/internal/node/fake"
+	"github.com/2rdzy/nwc4ln/wallet/internal/store"
 )
 
 // Catches: a backup that cannot be restored, or that is not one consistent snapshot of
