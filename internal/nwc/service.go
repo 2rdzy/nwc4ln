@@ -133,6 +133,10 @@ type Service struct {
 	burst        int
 	invoiceBurst int
 
+	// noNIP04 refuses NIP-04 requests and sends no NIP-04 notifications. It is set
+	// before Run and never changes after.
+	noNIP04 bool
+
 	methods map[string]method
 
 	connectionsMu sync.RWMutex
@@ -190,6 +194,19 @@ func New(
 		return nil, err
 	}
 	return s, nil
+}
+
+// DisableNIP04 turns the old encryption off: the info event offers NIP-44 only,
+// a NIP-04 request, or one with no encryption tag, gets UNSUPPORTED_ENCRYPTION,
+// and no kind 23196 notification is sent. Call it before Run.
+func (s *Service) DisableNIP04() { s.noNIP04 = true }
+
+// encryptionTag lists the schemes we accept, preferred first.
+func (s *Service) encryptionTag() string {
+	if s.noNIP04 {
+		return schemeNIP44
+	}
+	return schemeNIP44 + " " + schemeNIP04
 }
 
 func (s *Service) load(ctx context.Context) error {

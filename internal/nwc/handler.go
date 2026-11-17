@@ -250,6 +250,9 @@ func (s *Service) answer(ctx context.Context, a *accepted) (*response, string, s
 		scheme = schemeNIP04 // Clients from before the tag existed.
 	}
 	c, err := newCipher(scheme, a.connection.clientPub, a.connection.serviceKey)
+	if err == nil && scheme == schemeNIP04 && s.noNIP04 {
+		err = errUnsupportedEncryption // The operator turned NIP-04 off.
+	}
 	if errors.Is(err, errUnsupportedEncryption) {
 		reply := failure("", codeUnsupportedEncryption, "this encryption is not supported")
 		return reply, schemeNIP44, "", stateFailed
@@ -258,6 +261,9 @@ func (s *Service) answer(ctx context.Context, a *accepted) (*response, string, s
 		return nil, "", "", stateFailed // The key is bad, so nothing can reach the client.
 	}
 	plain, err := c.decrypt(a.event.Content)
+	if errors.Is(err, errDecryptPanic) {
+		s.log.Error("request content made decryption panic", "event", a.event.ID, "scheme", scheme, "error", err)
+	}
 	if err != nil {
 		return failure("", codeOther, "cannot decrypt the request"), scheme, "", stateFailed
 	}

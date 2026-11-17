@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/getAlby/go-nostr"
+	"github.com/getAlby/go-nostr/nip04"
+	"github.com/getAlby/go-nostr/nip44"
 
 	"github.com/2rdzy/nwc4ln/internal/nwc/nwctest"
 )
@@ -68,4 +70,55 @@ func (e *env) transactions() int {
 		e.t.Fatal(err)
 	}
 	return count
+}
+
+// fuzzKeys gives one cipher of each scheme, between two fresh keys.
+func fuzzKeys(f *testing.F) (cipher, cipher) {
+	clientSecret, _ := nwctest.NewKey()
+	_, servicePub := nwctest.NewKey()
+	old, err := newCipher(schemeNIP04, servicePub, clientSecret)
+	if err != nil {
+		f.Fatal(err)
+	}
+	current, err := newCipher(schemeNIP44, servicePub, clientSecret)
+	if err != nil {
+		f.Fatal(err)
+	}
+	return old, current
+}
+
+// Catches: request content that makes the NIP-04 library panic, which before our
+// own guard stopped the service. It calls the library, not cipher.decrypt, whose
+// recover would hide the panic this looks for.
+func FuzzDecryptNIP04(f *testing.F) {
+	old, _ := fuzzKeys(f)
+	valid, err := nip04.Encrypt(`{"method":"get_info"}`, old.nip04Key)
+	if err != nil {
+		f.Fatal(err)
+	}
+	for _, seed := range []string{
+		valid, "AA==?iv=AA==", "AA==?iv=AAAAAAAAAAAAAAAAAAAAAA==", "?iv=", "not encrypted", "",
+		"AAAAAAAAAAAAAAAAAAAAAA==?iv=AAAAAAAAAAAAAAAAAAAAAA==",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, content string) {
+		_, _ = nip04.Decrypt(content, old.nip04Key)
+	})
+}
+
+// Catches: request content that makes the NIP-44 library panic. It calls the
+// library, not cipher.decrypt, whose recover would hide the panic.
+func FuzzDecryptNIP44(f *testing.F) {
+	_, current := fuzzKeys(f)
+	valid, err := nip44.Encrypt(`{"method":"get_info"}`, current.nip44Key)
+	if err != nil {
+		f.Fatal(err)
+	}
+	for _, seed := range []string{valid, "", "#", "Ag==", valid[:len(valid)/2], "not encrypted"} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, content string) {
+		_, _ = nip44.Decrypt(content, current.nip44Key)
+	})
 }

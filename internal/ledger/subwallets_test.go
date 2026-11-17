@@ -3,6 +3,7 @@ package ledger
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -416,11 +417,15 @@ func TestDescriptionCap(t *testing.T) {
 }
 
 // Catches: an expiry so short the open-invoice cap never binds, or so long the invoice
-// is looked up for weeks, and a valid one refused.
+// is looked up for weeks, and a valid one refused. The last three are numbers of
+// seconds that wrap as a time.Duration: 18446747674 wraps to about one hour.
 func TestInvoiceExpiryBounds(t *testing.T) {
 	e := newEnv(t)
 	e.start()
-	for seconds, ok := range map[int64]bool{0: true, 59: false, 60: true, 7 * 24 * 3600: true, 7*24*3600 + 1: false, -1: false} {
+	for seconds, ok := range map[int64]bool{
+		0: true, 59: false, 60: true, 7 * 24 * 3600: true, 7*24*3600 + 1: false, -1: false,
+		18446747674: false, math.MaxInt64/int64(time.Second) + 61: false, math.MaxInt64: false,
+	} {
 		_, err := e.ledger.MakeInvoice(context.Background(),
 			InvoiceRequest{AccountID: e.acct, AmountMsat: sat, ExpirySeconds: seconds})
 		if ok && err != nil || !ok && !errors.Is(err, ErrBadExpiry) {

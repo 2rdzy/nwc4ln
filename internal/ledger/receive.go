@@ -32,8 +32,10 @@ func (l *Ledger) MakeInvoice(ctx context.Context, request InvoiceRequest) (Trans
 	if len(request.Description) > MaxDescriptionBytes {
 		return Transaction{}, ErrDescriptionTooLong
 	}
-	if expiry := time.Duration(request.ExpirySeconds) * time.Second; request.ExpirySeconds != 0 &&
-		(request.ExpirySeconds < 0 || expiry < minInvoiceExpiry || expiry > maxInvoiceExpiry) {
+	// Compare seconds with seconds: a large number of seconds wraps when turned into
+	// a time.Duration, and could land back inside the range.
+	if seconds := request.ExpirySeconds; seconds != 0 &&
+		(seconds < int64(minInvoiceExpiry/time.Second) || seconds > int64(maxInvoiceExpiry/time.Second)) {
 		return Transaction{}, ErrBadExpiry
 	}
 	settings, err := l.checkAccount(ctx, l.db, request.AccountID)

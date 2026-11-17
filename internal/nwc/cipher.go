@@ -12,11 +12,19 @@ import (
 const (
 	schemeNIP44 = "nip44_v2"
 	schemeNIP04 = "nip04"
-	// encryptionTag lists what we accept, preferred first.
-	encryptionTag = schemeNIP44 + " " + schemeNIP04
 )
 
-var errUnsupportedEncryption = errors.New("unsupported encryption")
+var (
+	errUnsupportedEncryption = errors.New("unsupported encryption")
+	// errDecryptPanic marks content that made the library panic.
+	errDecryptPanic = errors.New("decryption panicked")
+)
+
+// The library calls, held here so that a test can make one panic.
+var (
+	nip04Decrypt = nip04.Decrypt
+	nip44Decrypt = nip44.Decrypt
+)
 
 // cipher encrypts between one service key and one client.
 type cipher struct {
@@ -49,9 +57,18 @@ func (c cipher) encrypt(plain string) (string, error) {
 	return nip04.Encrypt(plain, c.nip04Key)
 }
 
-func (c cipher) decrypt(content string) (string, error) {
+// decrypt opens content a stranger can write. The library once panicked on a
+// malformed NIP-04 envelope, and a panic here would stop the service, so one is
+// turned into an error. The recover covers decryption only, never the command:
+// a panic in a payment must not become an ordinary failure reply.
+func (c cipher) decrypt(content string) (plain string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			plain, err = "", fmt.Errorf("%w: %v", errDecryptPanic, r)
+		}
+	}()
 	if c.scheme == schemeNIP44 {
-		return nip44.Decrypt(content, c.nip44Key)
+		return nip44Decrypt(content, c.nip44Key)
 	}
-	return nip04.Decrypt(content, c.nip04Key)
+	return nip04Decrypt(content, c.nip04Key)
 }

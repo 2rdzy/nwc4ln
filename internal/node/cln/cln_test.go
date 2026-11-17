@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,10 +25,11 @@ const testRune = "test-rune"
 
 // reply is what the fake clnrest sends: a result, or a JSON-RPC error.
 type reply struct {
-	result any
-	code   int // Above 0 sends a JSON-RPC error with this code.
-	data   any
-	broken bool // Sends a reply that is not JSON-RPC, as a proxy or a crash would.
+	result  any
+	code    int    // Above 0 sends a JSON-RPC error with this code.
+	message string // The error message, "fake error" if empty.
+	data    any
+	broken  bool // Sends a reply that is not JSON-RPC, as a proxy or a crash would.
 }
 
 func ok(result any) reply { return reply{result: result} }
@@ -40,6 +43,8 @@ type server struct {
 	handlers map[string]func(params map[string]any) reply
 	calls    []string
 	params   map[string][]map[string]any
+	// redirect, when set, answers every request in place of the handlers.
+	redirect http.HandlerFunc
 }
 
 func (s *server) on(method string, handler func(params map[string]any) reply) {
@@ -55,6 +60,13 @@ func (s *server) called(method string) []map[string]any {
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	redirect := s.redirect
+	s.mu.Unlock()
+	if redirect != nil {
+		redirect(w, r)
+		return
+	}
 	method := strings.TrimPrefix(r.URL.Path, "/v1/")
 	if r.Header.Get("Rune") != testRune || r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -79,10 +91,14 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case answer.broken:
 		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write([]byte("<html>bad gateway</html>"))
+		_, _ = w.Write([]byte("<html>bad gateway " + answer.message + "</html>"))
 	case answer.code != 0:
 		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]any{"code": answer.code, "message": "fake error", "data": answer.data})
+		message := answer.message
+		if message == "" {
+			message = "fake error"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": answer.code, "message": message, "data": answer.data})
 	default:
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(answer.result)
@@ -578,5 +594,58 @@ func TestNewRefusesUnsafeSetup(t *testing.T) {
 	if _, err := New(Config{URL: "http://127.0.0.1:3010", CACertPath: ca, RunePath: runePath}); err == nil ||
 		!strings.Contains(err.Error(), "https") {
 		t.Fatalf("plain HTTP: %v", err)
+	}
+}
+
+// Catches: the rune sent to a host other than the configured one, because the
+// client followed a redirect, and a redirect taken for a reply.
+func TestRedirectRefused(t *testing.T) {
+	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect} {
+		for _, plain := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%d/plain=%v", status, plain), func(t *testing.T) {
+				var received atomic.Int32
+				other := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					received.Add(1)
+					w.WriteHeader(http.StatusInternalServerError)
+				}))
+				if plain {
+					other.Start()
+				} else {
+					other.StartTLS()
+				}
+				defer other.Close()
+				s, c := newServer(t)
+				s.mu.Lock()
+				s.redirect = func(w http.ResponseWriter, r *http.Request) {
+					http.Redirect(w, r, other.URL+r.URL.Path, status)
+				}
+				s.mu.Unlock()
+				_, err := c.Info(t.Context())
+				if err == nil || !strings.Contains(err.Error(), "redirects are refused") {
+					t.Fatalf("error %v", err)
+				}
+				if n := received.Load(); n != 0 {
+					t.Fatalf("other host received %d requests", n)
+				}
+			})
+		}
+	}
+}
+
+// Catches: the rune copied into an error, and so into the log, when Core
+// Lightning with developer APIs repeats a malformed rune in its message.
+func TestErrorHidesRune(t *testing.T) {
+	s, c := newServer(t)
+	s.on("getinfo", func(map[string]any) reply {
+		return reply{code: -32602, message: "rune: should be base64 string: invalid token '\"" + testRune + "\"'"}
+	})
+	_, err := c.Info(t.Context())
+	if err == nil || strings.Contains(err.Error(), testRune) || !strings.Contains(err.Error(), "<rune>") {
+		t.Fatalf("error %v", err)
+	}
+	s.on("getinfo", func(map[string]any) reply { return reply{broken: true, message: testRune} })
+	_, err = c.Info(t.Context())
+	if err == nil || strings.Contains(err.Error(), testRune) {
+		t.Fatalf("error %v", err)
 	}
 }
