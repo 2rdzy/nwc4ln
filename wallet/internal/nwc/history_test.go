@@ -49,6 +49,7 @@ func TestHistoryPagedBySize(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	e.now.Add(60) // The ledger's clock is the real one, and until defaults to this one.
 	for _, scheme := range []string{nwctest.NIP44, nwctest.NIP04} {
 		seen := map[string]bool{}
 		pages := 0
