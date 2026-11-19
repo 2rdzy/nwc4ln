@@ -12,7 +12,7 @@ This repository holds three programs. Each folder is its own Go module, and no f
 | Folder | Binary | What |
 |---|---|---|
 | [`wallet/`](wallet/README.md) | `nwc4ln-wallet` | The wallet: NWC, apps with limits, sub-wallets and the admin web UI, on top of your node |
-| `relay/` | `nwc4ln-relay` | Planned: a Nostr relay locked to the wallet's connections. Optional |
+| [`relay/`](relay/README.md) | `nwc4ln-relay` | A Nostr relay locked to the wallet's connections. Optional |
 | `address/` | `nwc4ln-address` | Planned: a Lightning address service (LNURL-pay) that creates invoices over NWC |
 
 A `system/` folder will hold tests that run more than one program.
