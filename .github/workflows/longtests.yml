@@ -79,3 +79,6 @@ jobs:
           go test -run '^$' -fuzz '^FuzzPayAmount$' -fuzztime 1m ./internal/ledger
           go test -run '^$' -fuzz '^FuzzAmountFromForm$' -fuzztime 1m ./internal/web
           go test -run '^$' -fuzz '^FuzzSettingsFromForm$' -fuzztime 1m ./internal/web
+      - name: Fuzz the relay's allow-list reader for a minute
+        working-directory: relay
+        run: go test -run '^$' -fuzz '^FuzzAllowList$' -fuzztime 1m ./internal/allowlist

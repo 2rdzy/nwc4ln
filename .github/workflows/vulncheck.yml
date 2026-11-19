@@ -11,11 +11,6 @@ on:
 permissions:
   contents: read
 
-# The wallet is one of the programs in this repository, in its own folder.
-defaults:
-  run:
-    working-directory: wallet
-
 jobs:
   govulncheck:
     name: govulncheck
@@ -30,4 +25,21 @@ jobs:
           go-version-file: wallet/go.mod
           cache-dependency-path: wallet/go.sum
       - name: govulncheck
+        working-directory: wallet
+        run: scripts/vulncheck.sh
+
+  relay:
+    name: govulncheck (relay)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: relay/go.mod
+          cache-dependency-path: relay/go.sum
+      - name: govulncheck
+        working-directory: relay
         run: scripts/vulncheck.sh

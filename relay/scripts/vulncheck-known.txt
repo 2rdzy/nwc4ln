@@ -1,0 +1,3 @@
+# Vulnerabilities govulncheck reports that do not affect nwc4ln-relay. Each line is
+# an ID, then why. scripts/vulncheck.sh fails on any other. Remove a line once a
+# fixed version is in go.mod: the script says when one is no longer found.

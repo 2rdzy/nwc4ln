@@ -1,0 +1,49 @@
+# Checks for the relay on every pull request and on main. The relay is its own Go
+# module in relay/, so it has its own workflow and the wallet's stay as they are.
+# Actions are pinned by commit, the token is read-only, and pull requests use no
+# secrets. There is no paths filter: a required job that never runs would leave a
+# pull request waiting.
+name: relay
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: relay
+
+concurrency:
+  group: relay-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  relay:
+    name: relay
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: relay/go.mod
+          cache-dependency-path: relay/go.sum
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./... && go vet -tags relay ./...
+      - name: Only internal/server uses khatru
+        run: |
+          if grep -rl 'fiatjaf.com/nostr/khatru' --include='*.go' . | grep -v '^./internal/server/'; then exit 1; fi
+      - name: Unit tests
+        run: go test -race ./...
+      - name: Relay process tests
+        run: go test -race -tags relay ./test/...
+      - name: Build without C
+        run: CGO_ENABLED=0 go build ./...
