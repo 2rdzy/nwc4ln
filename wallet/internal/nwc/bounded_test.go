@@ -121,8 +121,13 @@ func silentPublish(s *Service) *atomic.Int64 {
 // publish while the relay acknowledges nothing (S02). Goroutines, replies waiting to
 // be published and heap stay under fixed ceilings, and 50 requests (the burst) are
 // stored.
+//
+// The running cap per connection is raised to the burst here. With the real cap of
+// 8, a request that finds 8 still running is refused after it took its rate token,
+// so a busy machine stores fewer than 50 rows. This test is about the rate.
 func TestRateLimitedFloodIsBounded(t *testing.T) {
 	e := newEnv(t)
+	e.service.maxRunningEach = rateBurst
 	ctx, cancel := context.WithCancel(context.Background())
 	defer func() { cancel(); e.service.work.Wait() }()
 	waiting := silentPublish(e.service)
@@ -146,7 +151,7 @@ func TestRateLimitedFloodIsBounded(t *testing.T) {
 	runtime.GC()
 	runtime.ReadMemStats(&after)
 	// Every running request and refusal reply, plus slack for the database driver.
-	ceiling := maxRunningEach + replyBudget + 20
+	ceiling := e.service.maxRunningEach + replyBudget + 20
 	t.Logf("%d events: %d goroutines above the start, %d replies waiting, heap %+d KiB, %d rows", flood, grown,
 		int(waiting.Load())+len(e.service.outbox), (int64(after.HeapAlloc)-int64(before.HeapAlloc))>>10, e.requests())
 	if grown > ceiling {
