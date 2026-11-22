@@ -300,19 +300,25 @@ func TestSubWalletAdminOnRealNode(t *testing.T) {
 	if err := service.DeleteSubWallet(ctx, id); err != nil {
 		t.Fatal(err)
 	}
+	// The sweep moves the balance as a payment through the node. While it is in flight
+	// the balance reads 0 and the main wallet does not have it back yet: it is held.
+	// So wait for both, or a check between the two sees the held amount missing.
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
 		balance, err := money.Balance(ctx, id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if balance == 0 {
+		available, err := money.MainAvailable(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if balance == 0 && available == before {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("balance %d stayed in a deleted sub-wallet", balance)
+			t.Fatalf("after the delete: balance %d, available %d, want 0 and %d", balance, available, before)
 		}
 	}
-	wantMoney(0, before)
 	if response := call(t, replaced, nwctest.NIP44, "get_balance"); response.Error == nil || response.Error.Code != "UNAUTHORIZED" {
 		t.Fatalf("key of a deleted sub-wallet: %+v", response)
 	}
