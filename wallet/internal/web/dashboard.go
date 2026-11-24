@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -27,6 +28,9 @@ type dashboardData struct {
 	Counted     bool
 	AppCount    int
 	WalletCount int
+	// Relay is what is known about the relay. RelayKnown is false with no RelayStatus.
+	RelayKnown, RelayControl, ClearText bool
+	RelayProblem                        string
 }
 
 // Figures in sats, rounded so that rounding never hides a shortfall: what the node
@@ -64,6 +68,10 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("dashboard: counts unknown", "error", err)
 	} else {
 		data.Counted, data.AppCount, data.WalletCount = true, len(apps), len(wallets)
+	}
+	if s.relay != nil {
+		data.RelayKnown = true
+		data.RelayControl, data.ClearText, data.RelayProblem = s.relay.RelayState()
 	}
 	s.render(w, "dashboard.html", data)
 }
@@ -132,4 +140,10 @@ func (s *Server) setPaused(w http.ResponseWriter, r *http.Request, paused bool) 
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// listed waits for the relay to know a new connection, and reports whether it
+// does. With no RelayStatus there is nothing to wait for.
+func (s *Server) listed(ctx context.Context) bool {
+	return s.relay == nil || s.relay.WaitListed(ctx)
 }

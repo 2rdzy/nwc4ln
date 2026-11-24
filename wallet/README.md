@@ -18,6 +18,8 @@ the node. Channels, peers and on-chain funds stay with LND or Core Lightning and
 - **Create sub-wallets** for other people. A sub-wallet has its own balance, starts at 0 and has no limit. It is funded
   by invoice, keeps what it receives, and its funds are set aside from your main wallet inside `nwc4ln-wallet`.
 - **Admin web UI,** with login by Nostr key. Only the admin logs in. Everyone else connects over NWC.
+- **Any Nostr relay, or a locked one.** With `relay_control = true`, the wallet tells
+  [`nwc4ln-relay`](../relay/README.md) which keys may use it. `nwc4ln-wallet control-key` prints the key the relay needs.
 - **Ship as one binary,** written in Go, with the web UI built in. Linux `amd64` first.
 
 Testing covers the BLAKE2b chain of Bitcoin Knots only, using

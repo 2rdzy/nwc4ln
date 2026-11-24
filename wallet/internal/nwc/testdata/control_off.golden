@@ -1,0 +1,9 @@
+REQ {"kinds":[23194],"since":1795046100,"#p":["service1"]} filters=1
+EVENT {"content":"get_balance get_budget get_info list_transactions lookup_invoice make_invoice pay_invoice","created_at":1795046400,"kind":13194,"pubkey":"service1","tags":[["encryption","nip44_v2 nip04"],["notifications","payment_received payment_sent"],["extensions","02 05 13"]]}
+REQ {"kinds":[23194],"since":1795046100,"#p":["service1","service2"]} filters=1
+EVENT {"content":"get_balance get_budget get_info list_transactions lookup_invoice make_invoice pay_invoice","created_at":1795046401,"kind":13194,"pubkey":"service1","tags":[["encryption","nip44_v2 nip04"],["notifications","payment_received payment_sent"],["extensions","02 05 13"]]}
+EVENT {"content":"get_balance get_budget get_info list_transactions lookup_invoice pay_invoice","created_at":1795046400,"kind":13194,"pubkey":"service2","tags":[["encryption","nip44_v2 nip04"],["notifications","payment_received payment_sent"],["extensions","02 05 13"]]}
+CLOSE
+REQ {"kinds":[23194],"since":1795046100,"#p":["service1","service2"]} filters=1
+EVENT {"content":"get_balance get_budget get_info list_transactions lookup_invoice pay_invoice","created_at":1795046401,"kind":13194,"pubkey":"service2","tags":[["encryption","nip44_v2 nip04"],["notifications","payment_received payment_sent"],["extensions","02 05 13"]]}
+CLOSE

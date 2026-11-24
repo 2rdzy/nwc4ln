@@ -4,6 +4,7 @@
 <h1>{{if .Replaced}}New connection string for {{.Name}}{{else}}{{.Name}} added{{end}}</h1>
 {{if .Replaced}}<p class="note" id="replaced">The old connection string has stopped working. The settings, usage and history are unchanged.</p>{{end}}
 <p class="warn"><b>This is the only time the connection string is shown.</b> nwc4ln keeps no copy of its secret. Copy it into the app now, or scan the code. Anyone with it can use the app's permissions. Reloading this page {{if .Replaced}}replaces the string again, and this one stops working{{else}}adds another app{{end}}.</p>
+{{if .Unlisted}}<p class="warn" id="unlisted"><b>The relay has not confirmed this connection yet.</b> Its first requests may be refused for a moment. If it keeps failing, the dashboard says why.</p>{{end}}
 <section class="card">
 {{if .QR}}<div id="qr">{{.QR}}</div>{{end}}
 <p><textarea id="connection" readonly rows="5" cols="70">{{.ConnectionString}}</textarea></p>

@@ -30,7 +30,7 @@ const (
 	dataDirMode  = 0o700
 	usage        = "usage: nwc4ln-wallet init [--admin npub] [--config path], nwc4ln-wallet start [--config path], " +
 		"nwc4ln-wallet backup [--config path] <file>, nwc4ln-wallet check [--all] [--config path], " +
-		"or nwc4ln-wallet set-admin [--config path] <npub>"
+		"nwc4ln-wallet set-admin [--config path] <npub>, or nwc4ln-wallet control-key [--config path]"
 )
 
 func main() {
@@ -85,6 +85,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return runBackup(ctx, path, flags.Arg(0), out)
 	case "set-admin":
 		return runSetAdmin(ctx, path, flags.Arg(0), out)
+	case "control-key":
+		return runControlKey(ctx, path, out)
 	default:
 		return errors.New(usage)
 	}
@@ -123,6 +125,9 @@ func runInit(ctx context.Context, configPath, adminNpub string, out io.Writer) e
 		if err := db.SetAdminKey(ctx, adminKey); err != nil {
 			return errors.Join(err, db.Close())
 		}
+	}
+	if err := nwc.EnsureControlKey(ctx, db); err != nil {
+		return errors.Join(err, db.Close())
 	}
 	if err := db.Close(); err != nil {
 		return fmt.Errorf("close database: %w", err)
@@ -205,6 +210,10 @@ func runStart(ctx context.Context, configPath string, out io.Writer) (err error)
 	if err := nwc.CheckRelay(cfg.Relay); err != nil {
 		return err
 	}
+	// A database made before relay control existed gets its control key here.
+	if err := nwc.EnsureControlKey(ctx, db); err != nil {
+		return err
+	}
 	adminKey, err := db.AdminKey(ctx)
 	if err != nil {
 		return err
@@ -222,10 +231,15 @@ func runStart(ctx context.Context, configPath string, out io.Writer) (err error)
 	if cfg.DisableNIP04 {
 		service.DisableNIP04()
 	}
+	if cfg.RelayControl {
+		if err := service.UseRelayControl(ctx); err != nil {
+			return err
+		}
+	}
 	money.OnSettled(service.Notify)
 	ui, err := web.New(web.Config{
 		AdminKey: adminKey, AllowedHosts: cfg.AllowedHosts, NodeType: cfg.NodeType(), Ledger: money, Apps: service, SubWallets: service,
-		Log: slog.Default(),
+		Relay: service, Log: slog.Default(),
 	})
 	if err != nil {
 		return err
@@ -338,5 +352,29 @@ func runSetAdmin(ctx context.Context, configPath, npub string, out io.Writer) (e
 		return err
 	}
 	fmt.Fprintln(out, "admin key set to", npub)
+	return nil
+}
+
+// runControlKey prints the control public key, for nwc4ln-relay init --control.
+// It only reads, so it runs beside the service, as check does.
+func runControlKey(ctx context.Context, configPath string, out io.Writer) (err error) {
+	cfg, err := loadChecked(configPath)
+	if err != nil {
+		return err
+	}
+	db, err := store.OpenReadOnly(ctx, filepath.Join(cfg.DataDir, databaseName))
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	hex, npub, found, err := nwc.ControlPublicKey(ctx, db)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("no control key yet: it is made by init, or by the first start of this version")
+	}
+	fmt.Fprintln(out, npub)
+	fmt.Fprintln(out, hex)
 	return nil
 }

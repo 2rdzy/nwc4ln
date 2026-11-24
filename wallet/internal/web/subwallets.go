@@ -80,7 +80,9 @@ type connectionPage struct {
 	Title, Name, ConnectionString string
 	ID                            int64
 	Replaced                      bool
-	QR                            any
+	// Unlisted is true when the relay did not confirm the new key in time.
+	Unlisted bool
+	QR       any
 }
 
 // createSubWallet shows the connection string in its own response, once, as
@@ -96,10 +98,11 @@ func (s *Server) createSubWallet(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.showConnection(w, connectionPage{Title: name + " added", Name: name, ConnectionString: connectionString})
+	s.showConnection(w, r, connectionPage{Title: name + " added", Name: name, ConnectionString: connectionString})
 }
 
-func (s *Server) showConnection(w http.ResponseWriter, page connectionPage) {
+func (s *Server) showConnection(w http.ResponseWriter, r *http.Request, page connectionPage) {
+	page.Unlisted = !s.listed(r.Context())
 	qr, err := qrSVG(page.ConnectionString)
 	if err != nil {
 		// The connection exists, so the string is still shown, without its picture.
@@ -218,7 +221,7 @@ func (s *Server) replace(w http.ResponseWriter, r *http.Request) {
 		s.walletChangeFailed(w, err)
 		return
 	}
-	s.showConnection(w, connectionPage{
+	s.showConnection(w, r, connectionPage{
 		Title: "New connection string for " + wallet.Name, Name: wallet.Name, ID: wallet.ID,
 		ConnectionString: connectionString, Replaced: true,
 	})
