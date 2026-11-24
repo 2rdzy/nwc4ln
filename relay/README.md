@@ -2,7 +2,7 @@
 
 A Nostr relay locked to one wallet's Nostr Wallet Connect connections. The relay program of [nwc4ln](../README.md).
 
-> **Status: in development.** The relay runs on its own. The wallet does not send it an allow-list yet (planned next).
+> **Status: in development.** The wallet sends the allow-list when `relay_control = true` is set in its config.
 > Not ready for real funds.
 
 ## What it does
@@ -30,9 +30,13 @@ and refuses everything else.
 The relay listens on a loopback address in clear text. Put a TLS proxy, such as Caddy or nginx, in front of it.
 
 ```sh
+nwc4ln-wallet control-key          # prints the wallet's control npub, then the same key in hex
 nwc4ln-relay init --control <the wallet's control npub>
 nwc4ln-relay start
 ```
+
+Then set `relay_control = true` in the wallet's config, with the relay's `wss://` URL (or `ws://` to a loopback
+address), and restart the wallet.
 
 `init` writes `~/.nwc4ln-relay/nwc4ln-relay.toml`. `start --debug` also logs refused events and closed connections.
 

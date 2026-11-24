@@ -38,6 +38,9 @@ type Config struct {
 	// DisableNIP04 turns off the old NWC encryption. Absent or false, NIP-04 is
 	// accepted beside NIP-44, so older clients keep working.
 	DisableNIP04 bool `toml:"disable_nip04,omitempty"`
+	// RelayControl tells the relay, which must be nwc4ln-relay, which keys may use
+	// it. Absent or false, the wallet works with any relay and sends no allow-list.
+	RelayControl bool `toml:"relay_control,omitempty"`
 }
 
 // Default returns the settings for a new config file.

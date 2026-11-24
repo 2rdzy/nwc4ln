@@ -168,6 +168,10 @@ type Service struct {
 	// before Run and never changes after.
 	noNIP04 bool
 
+	// control is relay control's state, or nil while it is off. It is set before
+	// Run and never changes after.
+	control *control
+
 	methods map[string]method
 
 	connectionsMu sync.RWMutex
@@ -306,10 +310,14 @@ func (s *Service) connectionList() []connection {
 }
 
 // reload picks up a change to the connections, and tells the relay loop. The loop
-// listens for new keys, and publishes the info events again.
+// sends the allow-list if relay control is on, listens for new keys, and
+// publishes the info events again.
 func (s *Service) reload(ctx context.Context) error {
 	if err := s.load(ctx); err != nil {
 		return err
+	}
+	if s.control != nil {
+		s.control.changedConnections()
 	}
 	select {
 	case s.changed <- struct{}{}:

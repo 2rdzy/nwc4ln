@@ -443,3 +443,50 @@ func TestCheckRunsBesideTheService(t *testing.T) {
 		t.Fatalf("check changed the database: %v", err)
 	}
 }
+
+// Catches: a relay set up with a control key that is not the one the wallet signs
+// with: the key must be made by init, kept, and printed the same each time.
+func TestControlKeyCommand(t *testing.T) {
+	path := filepath.Join(dataDir(t), "nwc4ln-wallet.toml")
+	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var first, again strings.Builder
+	if err := run(t.Context(), []string{"control-key", "--config", path}, &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(t.Context(), []string{"control-key", "--config", path}, &again); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Fields(first.String())
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "npub1") || len(lines[1]) != 64 || first.String() != again.String() {
+		t.Fatalf("first:\n%s\nagain:\n%s", first.String(), again.String())
+	}
+}
+
+// Catches: the allow-list sent in clear text to another machine because start
+// accepted a ws:// relay with relay control on.
+func TestStartRefusesClearTextControl(t *testing.T) {
+	path := filepath.Join(dataDir(t), "nwc4ln-wallet.toml")
+	if err := run(t.Context(), []string{"init", "--config", path}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	writeServiceConfig(t, path, "ws://relay.example.com")
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.RelayControl = true
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Write(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := run(ctx, []string{"start", "--config", path}, io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "relay control needs a wss://") {
+		t.Fatalf("got %v", err)
+	}
+}

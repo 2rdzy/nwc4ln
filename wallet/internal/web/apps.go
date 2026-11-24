@@ -134,7 +134,9 @@ func (s *Server) createApp(w http.ResponseWriter, r *http.Request) {
 		// The app exists, so the string is still shown, without its picture.
 		s.log.Error("draw QR code", "error", err)
 	}
-	s.render(w, "app_created.html", map[string]any{"Name": name, "ConnectionString": connectionString, "QR": qr})
+	s.render(w, "app_created.html", map[string]any{
+		"Name": name, "ConnectionString": connectionString, "QR": qr, "Unlisted": !s.listed(r.Context()),
+	})
 }
 
 func (s *Server) replaceAppPage(w http.ResponseWriter, r *http.Request) {
@@ -163,6 +165,7 @@ func (s *Server) replaceApp(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, "app_created.html", map[string]any{
 		"Name": app.Name, "ID": app.ID, "Replaced": true, "ConnectionString": connectionString, "QR": qr,
+		"Unlisted": !s.listed(r.Context()),
 	})
 }
 

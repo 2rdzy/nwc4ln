@@ -59,7 +59,20 @@ type Config struct {
 	Ledger     Ledger
 	Apps       AppService
 	SubWallets SubWalletService
-	Log        *slog.Logger
+	// Relay tells what the dashboard shows about the relay. With none, it shows
+	// nothing about it.
+	Relay RelayStatus
+	Log   *slog.Logger
+}
+
+// RelayStatus is the NWC service's view of the relay.
+type RelayStatus interface {
+	// RelayState reports whether relay control is on, whether the relay URL is
+	// clear text to another machine, and why the relay last refused the allow-list.
+	RelayState() (controlOn, clearText bool, problem string)
+	// WaitListed waits a short time for the relay to accept the allow-list with
+	// every change so far, and reports whether it did.
+	WaitListed(ctx context.Context) bool
 }
 
 // Server is the admin UI.
@@ -69,6 +82,7 @@ type Server struct {
 	ledger   Ledger
 	apps     AppService
 	wallets  SubWalletService
+	relay    RelayStatus // Or nil.
 	log      *slog.Logger
 	pages    *template.Template
 	handler  http.Handler
@@ -89,7 +103,8 @@ type Server struct {
 // New returns the admin UI.
 func New(cfg Config) (*Server, error) {
 	s := &Server{
-		adminKey: cfg.AdminKey, ledger: cfg.Ledger, apps: cfg.Apps, wallets: cfg.SubWallets, log: cfg.Log,
+		adminKey: cfg.AdminKey, ledger: cfg.Ledger, apps: cfg.Apps, wallets: cfg.SubWallets, relay: cfg.Relay,
+		log:        cfg.Log,
 		nodeName:   nodeName(cfg.NodeType),
 		now:        time.Now,
 		hosts:      map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true},

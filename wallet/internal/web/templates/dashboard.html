@@ -21,6 +21,19 @@
 {{else if not .Synced}}
 <p class="warn" id="not-synced"><b>The node is catching up with the chain.</b> Payments that leave the node are paused until it is synced. Receiving, and payments between accounts, go on.</p>
 {{end}}
+{{if .RelayKnown}}
+{{if .RelayProblem}}
+<p class="warn" id="relay-problem"><b>The relay refused the allow-list.</b> Until it accepts one, requests may go unanswered and new connections do not work. The service keeps trying. {{.RelayProblem}}</p>
+{{end}}
+{{if not .RelayControl}}
+<section class="card" id="relay-unlocked" aria-label="The relay is not locked">
+<p class="note"><b>The relay is not locked.</b> Relay control is off, so the relay is not told which keys may use it. Strangers can post to it, its operator sees when requests come and go, and requests sent while the service is away can be lost. Run nwc4ln-relay and set relay_control = true to lock it.</p>
+</section>
+{{end}}
+{{if .ClearText}}
+<p class="warn" id="clear-text"><b>The relay URL is clear text.</b> It starts with ws:// and is not on this machine, so anyone on the path sees the traffic. Requests and replies are still encrypted, but their timing and keys are not. Use wss://.</p>
+{{end}}
+{{end}}
 {{if not .AlertsKnown}}
 <p class="warn" id="alerts-unknown">The alerts could not be read. The log has the details.</p>
 {{else if .Alerts}}
